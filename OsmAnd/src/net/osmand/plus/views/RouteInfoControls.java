@@ -212,8 +212,8 @@ public class RouteInfoControls {
 	
 	protected TextInfoControl createTimeControl(final MapActivity map, Paint paintText, Paint paintSubText){
 		final RoutingHelper routingHelper = map.getRoutingHelper();
-		final Drawable time = map.getResources().getDrawable(R.drawable.info_time);
-		final Drawable timeToGo = map.getResources().getDrawable(R.drawable.info_time_to_go);
+		final Drawable time = map.getResources().getDrawable(R.drawable.widget_time);
+		final Drawable timeToGo = map.getResources().getDrawable(R.drawable.widget_time_to_distance);
 		final OsmandApplication ctx = map.getMyApplication();
 		final OsmandPreference<Boolean> showArrival = ctx.getSettings().SHOW_ARRIVAL_TIME_OTHERWISE_EXPECTED_TIME;
 		final TextInfoControl leftTimeControl = new TextInfoControl(map, 0, paintText, paintSubText) {
@@ -308,7 +308,7 @@ public class RouteInfoControls {
 			}
 		};
 		altitudeControl.setText(null, null);
-		altitudeControl.setImageDrawable(map.getResources().getDrawable(R.drawable.info_altitude));
+		altitudeControl.setImageDrawable(map.getResources().getDrawable(R.drawable.widget_altitude));
 		return altitudeControl;
 	}
 	
@@ -348,7 +348,7 @@ public class RouteInfoControls {
 				return false;
 			}
 		};
-		speedControl.setImageDrawable(map.getResources().getDrawable(R.drawable.info_max_speed));
+		speedControl.setImageDrawable(map.getResources().getDrawable(R.drawable.widget_max_speed));
 		speedControl.setText(null, null);
 		return speedControl;
 	}
@@ -387,7 +387,7 @@ public class RouteInfoControls {
 				return false;
 			}
 		};
-		speedControl.setImageDrawable(map.getResources().getDrawable(R.drawable.info_speed));
+		speedControl.setImageDrawable(map.getResources().getDrawable(R.drawable.widget_speed));
 		speedControl.setText(null, null);
 		return speedControl;
 	}
@@ -460,7 +460,7 @@ public class RouteInfoControls {
 	protected TextInfoControl createDistanceControl(final MapActivity map, Paint paintText, Paint paintSubText) {
 		final OsmandMapTileView view = map.getMapView();
 		DistanceToPointInfoControl distanceControl = new DistanceToPointInfoControl(map, 0, paintText, paintSubText, map.getResources()
-				.getDrawable(R.drawable.info_target), view) {
+				.getDrawable(R.drawable.widget_target), view) {
 			@Override
 			public LatLon getPointToNavigate() {
 				return map.getPointToNavigate();
@@ -481,7 +481,7 @@ public class RouteInfoControls {
 		final OsmandMapTileView view = map.getMapView();
 		final TargetPointsHelper targets = map.getTargetPoints();
 		DistanceToPointInfoControl distanceControl = new DistanceToPointInfoControl(map, 0, paintText, paintSubText, map.getResources()
-				.getDrawable(R.drawable.info_intermediate), view) {
+				.getDrawable(R.drawable.widget_intermediate), view) {
 
 			@Override
 			protected void click(OsmandMapTileView view) {

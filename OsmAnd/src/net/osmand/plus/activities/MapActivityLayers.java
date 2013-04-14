@@ -274,7 +274,7 @@ public class MapActivityLayers {
 		adapter.registerSelectedItem(R.string.layer_poi_label, settings.SHOW_POI_LABEL.get() ? 1 : 0, 
 				R.drawable.list_activities_poi_labels);
 		adapter.registerSelectedItem(R.string.layer_favorites, settings.SHOW_FAVORITES.get() ? 1 : 0, 
-				R.drawable.list_activities_favorites);
+				R.drawable.list_activities_favorites2);
 		adapter.registerSelectedItem(R.string.layer_gpx_layer, 
 				getApplication().getGpxFileToDisplay() != null ? 1 : 0,  R.drawable.list_activities_gpx_tracks);
 		if(routeInfoLayer.couldBeVisible()){

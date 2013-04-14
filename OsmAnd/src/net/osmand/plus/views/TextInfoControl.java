@@ -1,5 +1,6 @@
 package net.osmand.plus.views;
 
+import net.osmand.plus.views.OsmandMapLayer.DrawSettings;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
@@ -102,7 +103,7 @@ public class TextInfoControl extends MapInfoControl {
 	}
 
 	@Override
-	public boolean updateInfo() {
+	public boolean updateInfo(DrawSettings drawSettings) {
 		return false;
 	}
 	

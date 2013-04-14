@@ -18,6 +18,7 @@ import net.osmand.plus.routing.AlarmInfo;
 import net.osmand.plus.routing.RouteCalculationResult.NextDirectionInfo;
 import net.osmand.plus.routing.RouteDirectionInfo;
 import net.osmand.plus.routing.RoutingHelper;
+import net.osmand.plus.views.OsmandMapLayer.DrawSettings;
 import net.osmand.router.TurnType;
 import net.osmand.util.Algorithms;
 import android.content.Context;
@@ -49,7 +50,7 @@ public class RouteInfoControls {
 			TurnType straight = TurnType.valueOf(TurnType.C, true);
 
 			@Override
-			public boolean updateInfo() {
+			public boolean updateInfo(DrawSettings drawSettings) {
 				boolean visible = false;
 				if (routingHelper != null && routingHelper.isRouteCalculated() && routingHelper.isFollowingMode()) {
 					makeUturnWhenPossible = routingHelper.makeUturnWhenPossible() ;
@@ -132,7 +133,7 @@ public class RouteInfoControls {
 		final NextTurnInfoControl nextTurnInfo = new NextTurnInfoControl(ctx, textPaint, subtextPaint, horisontalMini) {
 			NextDirectionInfo calc1 = new NextDirectionInfo();
 			@Override
-			public boolean updateInfo() {
+			public boolean updateInfo(DrawSettings drawSettings) {
 				boolean visible = false;
 				if (routingHelper != null && routingHelper.isRouteCalculated() && routingHelper.isFollowingMode()
 						) {
@@ -220,7 +221,7 @@ public class RouteInfoControls {
 			private long cachedLeftTime = 0;
 			
 			@Override
-			public boolean updateInfo() {
+			public boolean updateInfo(DrawSettings drawSettings) {
 				int time = 0;
 				if (routingHelper != null && routingHelper.isRouteCalculated()) {
 					boolean followingMode = routingHelper.isFollowingMode();
@@ -280,7 +281,7 @@ public class RouteInfoControls {
 			private int cachedAlt = 0;
 
 			@Override
-			public boolean updateInfo() {
+			public boolean updateInfo(DrawSettings drawSettings) {
 				// draw speed
 				Location loc = map.getLastKnownLocation();
 				if (loc != null && loc.hasAltitude()) {
@@ -318,7 +319,7 @@ public class RouteInfoControls {
 			private float cachedSpeed = 0;
 
 			@Override
-			public boolean updateInfo() {
+			public boolean updateInfo(DrawSettings drawSettings) {
 				float mx = 0; 
 				if ((rh == null || !rh.isFollowingMode()) && map.isMapLinkedToLocation()) {
 					RouteDataObject ro = map.getLastRouteDataObject();
@@ -358,7 +359,7 @@ public class RouteInfoControls {
 			private float cachedSpeed = 0;
 
 			@Override
-			public boolean updateInfo() {
+			public boolean updateInfo(DrawSettings drawSettings) {
 				// draw speed
 				if (map.getLastKnownLocation() != null && map.getLastKnownLocation().hasSpeed()) {
 					// .1 mps == 0.36 kph
@@ -423,7 +424,7 @@ public class RouteInfoControls {
 		}
 		
 		@Override
-		public boolean updateInfo() {
+		public boolean updateInfo(DrawSettings drawSettings) {
 			int d = getDistance();
 			if (distChanged(cachedMeters, d)) {
 				cachedMeters = d;
@@ -511,10 +512,10 @@ public class RouteInfoControls {
 	protected MiniMapControl createMiniMapControl(final RoutingHelper routingHelper, OsmandMapTileView view) {
 		final MiniMapControl miniMapControl = new MiniMapControl(view.getContext(), view) {
 			@Override
-			public boolean updateInfo() {
+			public boolean updateInfo(DrawSettings drawSettings) {
 				boolean visible = routingHelper.isFollowingMode();
 				updateVisibility(visible);
-				return super.updateInfo();
+				return super.updateInfo(drawSettings);
 			}
 		};
 		miniMapControl.setVisibility(View.GONE);
@@ -573,7 +574,7 @@ public class RouteInfoControls {
 			}
 			
 			@Override
-			public boolean updateInfo() {
+			public boolean updateInfo(DrawSettings drawSettings) {
 				boolean visible = false;
 				int locimminent = -1;
 				int[] loclanes = null;
@@ -645,7 +646,7 @@ public class RouteInfoControls {
 			private Bitmap img = null;
 			private int imgId;
 			@Override
-			public boolean updateInfo() {
+			public boolean updateInfo(DrawSettings drawSettings) {
 				boolean limits = settings.SHOW_SPEED_LIMITS.get();
 				boolean cams = settings.SHOW_CAMERAS.get();
 				boolean visible = false;

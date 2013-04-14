@@ -20,6 +20,7 @@ import net.osmand.plus.views.MapInfoControl;
 import net.osmand.plus.views.MapInfoLayer;
 import net.osmand.plus.views.OsmandMapTileView;
 import net.osmand.plus.views.TextInfoControl;
+import net.osmand.plus.views.OsmandMapLayer.DrawSettings;
 import android.app.AlertDialog;
 import android.app.AlertDialog.Builder;
 import android.app.Dialog;
@@ -370,7 +371,7 @@ public class ParkingPositionPlugin extends OsmandPlugin {
 			private int cachedMeters = 0;			
 			
 			@Override
-			public boolean updateInfo() {
+			public boolean updateInfo(DrawSettings drawSettings) {
 				LatLon parkingPoint = parkingLayer.getParkingPoint();
 				if( parkingPoint != null && !map.getRoutingHelper().isFollowingMode()) {
 					OsmandMapTileView view = map.getMapView();

@@ -680,14 +680,14 @@ public class MapInfoLayer extends OsmandMapLayer {
 	public void onDraw(Canvas canvas, RectF latlonBounds, RectF tilesRect, DrawSettings drawSettings) {
 		updateColorShadowsOfText(drawSettings);
 		// update data on draw
-		rightStack.updateInfo();
-		leftStack.updateInfo();
-		lanesControl.updateInfo();
-		alarmControl.updateInfo();
+		rightStack.updateInfo(drawSettings);
+		leftStack.updateInfo(drawSettings);
+		lanesControl.updateInfo(drawSettings);
+		alarmControl.updateInfo(drawSettings);
 		for (int i = 0; i < statusBar.getChildCount(); i++) {
 			View v = statusBar.getChildAt(i);
 			if (v instanceof MapControlUpdateable) {
-				((MapControlUpdateable) v).updateInfo();
+				((MapControlUpdateable) v).updateInfo(drawSettings);
 			}
 		}
 	}
@@ -725,12 +725,25 @@ public class MapInfoLayer extends OsmandMapLayer {
 		
 		FrameLayout fl = new FrameLayout(view.getContext());
 		FrameLayout.LayoutParams fparams = new FrameLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
-
-		ImageView configuration = new ImageView(map);
-		Drawable drawable = view.getResources().getDrawable(R.drawable.list_activities_config);
-		configuration.setBackgroundDrawable(drawable);
+		final Drawable config = view.getResources().getDrawable(R.drawable.list_activities_config);
+		final Drawable configWhite = view.getResources().getDrawable(R.drawable.list_activities_config_white);
+		ImageViewControl configuration = new ImageViewControl(map) {
+			private boolean nightMode;
+			
+			@Override
+			public boolean updateInfo(DrawSettings drawSettings) {
+				boolean nightMode = drawSettings == null ? false : drawSettings.isNightMode();
+				if(nightMode != this.nightMode) {
+					this.nightMode = nightMode;
+					setImageDrawable(nightMode ? configWhite : config);
+					return true;
+				}
+				return false;
+			}
+		};
+		configuration.setBackgroundDrawable(config);
 		fl.addView(configuration, fparams);
-		fparams = new FrameLayout.LayoutParams(drawable.getMinimumWidth(), drawable.getMinimumHeight());
+		fparams = new FrameLayout.LayoutParams(config.getMinimumWidth(), config.getMinimumHeight());
 		progressBar = new View(view.getContext());
 		fl.addView(progressBar, fparams);
 		fl.setOnClickListener(new View.OnClickListener() {
@@ -742,8 +755,22 @@ public class MapInfoLayer extends OsmandMapLayer {
 		return fl;
 	}
 	private View createGlobus(){
-		Drawable globusDrawable = view.getResources().getDrawable(R.drawable.list_activities_globus);
-		ImageView globus = new ImageView(view.getContext());
+		final Drawable globusDrawable = view.getResources().getDrawable(R.drawable.list_activities_globus);
+		final Drawable globusDrawableWhite = view.getResources().getDrawable(R.drawable.list_activities_globus_white);
+		ImageView globus = new ImageViewControl(view.getContext()) {
+			private boolean nightMode;
+
+			@Override
+			public boolean updateInfo(DrawSettings drawSettings) {
+				boolean nightMode = drawSettings == null ? false : drawSettings.isNightMode();
+				if(nightMode != this.nightMode) {
+					this.nightMode = nightMode;
+					setImageDrawable(nightMode ? globusDrawableWhite : globusDrawable);
+					return true;
+				}
+				return false;
+			}
+		};;
 		globus.setImageDrawable(globusDrawable);
 		globus.setOnClickListener(new View.OnClickListener() {
 			@Override
@@ -756,9 +783,22 @@ public class MapInfoLayer extends OsmandMapLayer {
 	}
 	
 	private ImageView createBackToLocation(final MapActivity map){
-		ImageView backToLocation = new ImageView(view.getContext());
+		final Drawable backToLoc = map.getResources().getDrawable(R.drawable.back_to_loc);
+		final Drawable backToLocWhite = map.getResources().getDrawable(R.drawable.back_to_loc_white);
+		ImageView backToLocation = new ImageViewControl(view.getContext()) {
+			boolean nightM;
+			@Override
+			public boolean updateInfo(DrawSettings drawSettings) {
+				boolean nightMode = drawSettings == null ? false : drawSettings.isNightMode();
+				if(nightM != nightMode) {
+					nightM = nightMode;
+					setImageDrawable(nightM ? backToLocWhite : backToLoc);
+				}
+				return false;
+			}
+		};
 		backToLocation.setPadding((int) (5 * scaleCoefficient), 0, (int) (5 * scaleCoefficient), 0);
-		backToLocation.setImageDrawable(map.getResources().getDrawable(R.drawable.back_to_loc));
+		backToLocation.setImageDrawable(backToLoc);
 		backToLocation.setOnClickListener(new View.OnClickListener() {
 			@Override
 			public void onClick(View v) {
@@ -768,10 +808,34 @@ public class MapInfoLayer extends OsmandMapLayer {
 		return backToLocation;
 	}
 	
-	private ImageView createLockInfo(final MapActivity map) {
-		final ImageView lockView = new ImageView(view.getContext());
-		final Drawable lockEnabled = view.getResources().getDrawable(R.drawable.lock_enabled);
-		final Drawable lockDisabled = view.getResources().getDrawable(R.drawable.lock_disabled);
+	private Drawable lockEnabled;
+	private Drawable lockDisabled;
+	protected boolean isScreenLocked;
+	private ImageViewControl createLockInfo(final MapActivity map) {
+		final Drawable lockEnabledNormal = view.getResources().getDrawable(R.drawable.lock_enabled);
+		final Drawable lockDisabledNormal = view.getResources().getDrawable(R.drawable.lock_disabled);
+		final Drawable lockEnabledWhite = view.getResources().getDrawable(R.drawable.lock_enabled_white);
+		final Drawable lockDisabledWhite = view.getResources().getDrawable(R.drawable.lock_disabled_white);
+		lockDisabled = lockDisabledNormal;
+		lockEnabled = lockEnabledNormal;
+		final ImageViewControl lockView = new ImageViewControl(view.getContext()) {
+
+			private boolean nightMode;
+
+			@Override
+			public boolean updateInfo(DrawSettings drawSettings) {
+				boolean nightMode = drawSettings == null ? false : drawSettings.isNightMode();
+				if(nightMode != this.nightMode) {
+					this.nightMode = nightMode;
+					lockDisabled = drawSettings.isNightMode() ? lockDisabledWhite : lockDisabledNormal;
+					lockEnabled = drawSettings.isNightMode() ? lockEnabledWhite : lockEnabledNormal;
+					setImageDrawable(isScreenLocked ? lockEnabled : lockDisabled);
+					return true;
+				}
+				return false;
+			}
+			
+		};
 		lockView.setBackgroundDrawable(lockDisabled);
 		final FrameLayout transparentLockView = new FrameLayout(view.getContext());
 		FrameLayout.LayoutParams fparams = new FrameLayout.LayoutParams(LayoutParams.FILL_PARENT, LayoutParams.FILL_PARENT, Gravity.CENTER);
@@ -811,8 +875,6 @@ public class MapInfoLayer extends OsmandMapLayer {
 		});
 		final FrameLayout parent = (FrameLayout) view.getParent();
 		lockView.setOnClickListener(new View.OnClickListener() {
-			protected boolean isScreenLocked;
-
 			@Override
 			public void onClick(View v) {
 				if (!isScreenLocked) {
@@ -835,22 +897,27 @@ public class MapInfoLayer extends OsmandMapLayer {
 	
 	
 	private ImageViewControl createCompassView(final MapActivity map){
-		final Drawable compass = map.getResources().getDrawable(R.drawable.compass);
+		
+		
+		final OsmandMapTileView view = map.getMapView();
+		final Drawable compass = map.getResources().getDrawable(R.drawable.list_activities_compass);
+		final Drawable compassWhite = map.getResources().getDrawable(R.drawable.list_activities_compass_white);
 		final int mw = (int) compass.getMinimumWidth() ;
 		final int mh = (int) compass.getMinimumHeight() ;
-		final OsmandMapTileView view = map.getMapView();
 		ImageViewControl compassView = new ImageViewControl(map) {
+			Drawable d = compass;
 			private float cachedRotate = 0;
 			@Override
 			protected void onDraw(Canvas canvas) {
 				canvas.save();
 				canvas.rotate(view.getRotate(), mw / 2, mh / 2);
-				compass.draw(canvas);
+				d.draw(canvas);
 				canvas.restore();
 			}
 		
 			@Override
-			public boolean updateInfo() {
+			public boolean updateInfo(DrawSettings drawSettings) {
+				d = drawSettings != null && drawSettings.isNightMode() ? compassWhite : compass;
 				if(view.getRotate() != cachedRotate) {
 					cachedRotate = view.getRotate();
 					invalidate();
@@ -893,7 +960,7 @@ public class MapInfoLayer extends OsmandMapLayer {
 		}
 		
 		@Override
-		public boolean updateInfo() {
+		public boolean updateInfo(DrawSettings drawSettings) {
 			String text = null;
 			if (routingHelper != null && routingHelper.isRouteCalculated()) {
 				if (routingHelper.isFollowingMode()) {

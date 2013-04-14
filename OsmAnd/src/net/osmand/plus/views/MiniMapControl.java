@@ -1,6 +1,7 @@
 package net.osmand.plus.views;
 
 import net.osmand.plus.R;
+import net.osmand.plus.views.OsmandMapLayer.DrawSettings;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -43,7 +44,7 @@ public class MiniMapControl extends MapInfoControl {
 	}
 
 	@Override
-	public boolean updateInfo() {
+	public boolean updateInfo(DrawSettings drawSettings) {
 		if(getVisibility() == View.VISIBLE) {
 			invalidate();
 		}

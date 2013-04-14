@@ -22,6 +22,7 @@ import net.osmand.plus.views.MapInfoLayer;
 import net.osmand.plus.views.MonitoringInfoControl;
 import net.osmand.plus.views.MonitoringInfoControl.MonitoringInfoControlServices;
 import net.osmand.plus.views.MonitoringInfoControl.ValueHolder;
+import net.osmand.plus.views.OsmandMapLayer.DrawSettings;
 import net.osmand.plus.views.OsmandMapTileView;
 import net.osmand.plus.views.TextInfoControl;
 
@@ -193,7 +194,7 @@ public class OsmandMonitoringPlugin extends OsmandPlugin implements MonitoringIn
 		monitoringControl = new TextInfoControl(map, 0, paintText, paintSubText) {
 			long lastUpdateTime;
 			@Override
-			public boolean updateInfo() {
+			public boolean updateInfo(DrawSettings drawSettings) {
 				boolean visible = true;
 				String txt = map.getString(R.string.monitoring_control_start);
 				String subtxt = null;
@@ -234,7 +235,7 @@ public class OsmandMonitoringPlugin extends OsmandPlugin implements MonitoringIn
 				}, 500);
 			}
 		};
-		monitoringControl.updateInfo();
+		monitoringControl.updateInfo(null);
 
 		// monitoringControl.addView(child);
 		monitoringControl.setOnClickListener(new View.OnClickListener() {
@@ -246,7 +247,7 @@ public class OsmandMonitoringPlugin extends OsmandPlugin implements MonitoringIn
 				}
 				settings.SAVE_TRACK_TO_GPX.set(!isTrackMonitored);
 				
-				monitoringControl.updateInfo();
+				monitoringControl.updateInfo(null);
 			}
 		});
 		return monitoringControl;

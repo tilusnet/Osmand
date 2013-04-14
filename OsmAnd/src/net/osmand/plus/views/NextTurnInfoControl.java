@@ -2,6 +2,7 @@ package net.osmand.plus.views;
 
 import net.osmand.plus.OsmAndFormatter;
 import net.osmand.plus.R;
+import net.osmand.plus.views.OsmandMapLayer.DrawSettings;
 import net.osmand.router.TurnType;
 import android.content.Context;
 import android.graphics.Canvas;
@@ -140,7 +141,7 @@ public class NextTurnInfoControl extends MapInfoControl {
 	}
 
 	@Override
-	public boolean updateInfo() {
+	public boolean updateInfo(DrawSettings drawSettings) {
 		return false;
 	}
 }

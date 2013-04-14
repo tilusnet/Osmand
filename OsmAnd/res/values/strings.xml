@@ -10,8 +10,8 @@
     PLEASE: Have a look at http://code.google.com/p/osmand/wiki/UIConsistency, it may really improve your and our work  :-)  Thx - Hardy
     -->
     <string name="tip_recent_changes_1_1_4_t">Changes in 1.1.4:
+        \n\t* UI redesign
 		\n\t* Bug fixes
-		\n\t* Small UI redesign
     </string>
     <string name="access_arrival_time">Arrival time</string>
     <string name="item_checked">checked</string>

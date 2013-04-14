@@ -187,7 +187,6 @@ public class MapInfoLayer extends OsmandMapLayer {
 				view.getContext(), view.getSettings());
 		// register right stack
 		EnumSet<ApplicationMode> all = EnumSet.allOf(ApplicationMode.class);
-		EnumSet<ApplicationMode> carDefault = EnumSet.of(ApplicationMode.CAR, ApplicationMode.DEFAULT);
 		EnumSet<ApplicationMode> carBicycleDefault = EnumSet.of(ApplicationMode.CAR, ApplicationMode.DEFAULT, ApplicationMode.BICYCLE);
 		EnumSet<ApplicationMode> exceptCar = EnumSet.of(ApplicationMode.BICYCLE, ApplicationMode.PEDESTRIAN, ApplicationMode.DEFAULT);
 		EnumSet<ApplicationMode> none = EnumSet.noneOf(ApplicationMode.class);
@@ -719,22 +718,34 @@ public class MapInfoLayer extends OsmandMapLayer {
 		return progressBar;
 	}
 
+	private class ConfigLayout extends FrameLayout implements MapControlUpdateable {
+		private ImageViewControl config;
+
+		private ConfigLayout(Context c, ImageViewControl config) {
+			super(c);
+			this.config = config;
+		}
+
+		@Override
+		public boolean updateInfo(DrawSettings drawSettings) {
+			return config.updateInfo(drawSettings);
+		}
+	}
 	
 	private View createConfiguration(){
 		final OsmandMapTileView view = map.getMapView();
 		
-		FrameLayout fl = new FrameLayout(view.getContext());
 		FrameLayout.LayoutParams fparams = new FrameLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
 		final Drawable config = view.getResources().getDrawable(R.drawable.list_activities_config);
 		final Drawable configWhite = view.getResources().getDrawable(R.drawable.list_activities_config_white);
 		ImageViewControl configuration = new ImageViewControl(map) {
-			private boolean nightMode;
+			private boolean nm;
 			
 			@Override
 			public boolean updateInfo(DrawSettings drawSettings) {
-				boolean nightMode = drawSettings == null ? false : drawSettings.isNightMode();
-				if(nightMode != this.nightMode) {
-					this.nightMode = nightMode;
+				boolean nightMode = drawSettings != null && drawSettings.isNightMode();
+				if(nightMode != this.nm) {
+					this.nm = nightMode;
 					setImageDrawable(nightMode ? configWhite : config);
 					return true;
 				}
@@ -742,6 +753,7 @@ public class MapInfoLayer extends OsmandMapLayer {
 			}
 		};
 		configuration.setBackgroundDrawable(config);
+		FrameLayout fl = new ConfigLayout(view.getContext(), configuration) ;
 		fl.addView(configuration, fparams);
 		fparams = new FrameLayout.LayoutParams(config.getMinimumWidth(), config.getMinimumHeight());
 		progressBar = new View(view.getContext());
@@ -897,27 +909,30 @@ public class MapInfoLayer extends OsmandMapLayer {
 	
 	
 	private ImageViewControl createCompassView(final MapActivity map){
-		
-		
 		final OsmandMapTileView view = map.getMapView();
 		final Drawable compass = map.getResources().getDrawable(R.drawable.list_activities_compass);
 		final Drawable compassWhite = map.getResources().getDrawable(R.drawable.list_activities_compass_white);
 		final int mw = (int) compass.getMinimumWidth() ;
 		final int mh = (int) compass.getMinimumHeight() ;
 		ImageViewControl compassView = new ImageViewControl(map) {
-			Drawable d = compass;
 			private float cachedRotate = 0;
+			private boolean nm;
 			@Override
 			protected void onDraw(Canvas canvas) {
 				canvas.save();
 				canvas.rotate(view.getRotate(), mw / 2, mh / 2);
-				d.draw(canvas);
+				getDrawable().draw(canvas);
 				canvas.restore();
 			}
 		
 			@Override
 			public boolean updateInfo(DrawSettings drawSettings) {
-				d = drawSettings != null && drawSettings.isNightMode() ? compassWhite : compass;
+				boolean nightMode = drawSettings != null && drawSettings.isNightMode();
+				if(nightMode != this.nm) {
+					this.nm = nightMode;
+					setImageDrawable(nightMode ? compassWhite : compass);
+					return true;
+				}
 				if(view.getRotate() != cachedRotate) {
 					cachedRotate = view.getRotate();
 					invalidate();

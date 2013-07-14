@@ -1,6 +1,6 @@
 package net.osmand.access;
 
-import net.osmand.plus.R;
+import com.tilushq.osmand.plus.R;
 import android.content.Context;
 import android.view.LayoutInflater;
 import android.view.View;

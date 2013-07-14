@@ -2,7 +2,8 @@ package net.osmand.access;
 
 import java.util.ArrayList;
 
-import net.osmand.plus.OsmandApplication;
+import com.tilushq.osmand.plus.OsmandApplication;
+
 import android.content.Context;
 import android.graphics.Rect;
 import android.os.SystemClock;

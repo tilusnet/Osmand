@@ -1,9 +1,10 @@
 package net.osmand.access;
 
+import com.tilushq.osmand.plus.activities.MapActivity;
+import com.tilushq.osmand.plus.views.ContextMenuLayer;
+import com.tilushq.osmand.plus.views.OsmandMapTileView;
+
 import net.osmand.data.LatLon;
-import net.osmand.plus.activities.MapActivity;
-import net.osmand.plus.views.ContextMenuLayer;
-import net.osmand.plus.views.OsmandMapTileView;
 import android.graphics.PointF;
 import android.os.Build;
 

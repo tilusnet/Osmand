@@ -1,7 +1,7 @@
 package net.osmand.access;
 
-import net.osmand.plus.OsmandApplication;
-import net.osmand.plus.R;
+import com.tilushq.osmand.plus.OsmandApplication;
+import com.tilushq.osmand.plus.R;
 import android.content.Context;
 import android.view.accessibility.AccessibilityEvent;
 import android.widget.Toast;

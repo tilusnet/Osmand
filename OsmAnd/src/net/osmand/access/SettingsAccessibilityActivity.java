@@ -1,10 +1,11 @@
 package net.osmand.access;
 
 
-import net.osmand.plus.R;
-import net.osmand.plus.access.AccessibilityMode;
-import net.osmand.plus.access.RelativeDirectionStyle;
-import net.osmand.plus.activities.SettingsBaseActivity;
+import com.tilushq.osmand.plus.R;
+import com.tilushq.osmand.plus.access.AccessibilityMode;
+import com.tilushq.osmand.plus.access.RelativeDirectionStyle;
+import com.tilushq.osmand.plus.activities.SettingsBaseActivity;
+
 import android.os.Build;
 import android.os.Bundle;
 import android.preference.ListPreference;

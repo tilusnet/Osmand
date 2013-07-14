@@ -6,11 +6,12 @@ import java.util.List;
 import java.util.Map;
 
 import net.osmand.data.LatLon;
-import net.osmand.plus.R;
-import net.osmand.plus.views.ContextMenuLayer;
-import net.osmand.plus.views.ContextMenuLayer.IContextMenuProvider;
-import net.osmand.plus.views.OsmandMapLayer;
-import net.osmand.plus.views.OsmandMapTileView;
+import com.tilushq.osmand.plus.R;
+import com.tilushq.osmand.plus.views.ContextMenuLayer;
+import com.tilushq.osmand.plus.views.OsmandMapLayer;
+import com.tilushq.osmand.plus.views.OsmandMapTileView;
+import com.tilushq.osmand.plus.views.ContextMenuLayer.IContextMenuProvider;
+
 import android.content.Context;
 import android.graphics.PointF;
 import android.os.Build;

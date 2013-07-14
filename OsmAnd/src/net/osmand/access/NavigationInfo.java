@@ -6,12 +6,14 @@ import java.util.List;
 
 import net.osmand.Location;
 import net.osmand.data.LatLon;
-import net.osmand.plus.ClientContext;
-import net.osmand.plus.OsmAndFormatter;
-import net.osmand.plus.OsmandApplication;
-import net.osmand.plus.OsmandSettings;
-import net.osmand.plus.R;
-import net.osmand.plus.access.RelativeDirectionStyle;
+
+import com.tilushq.osmand.plus.ClientContext;
+import com.tilushq.osmand.plus.OsmAndFormatter;
+import com.tilushq.osmand.plus.OsmandApplication;
+import com.tilushq.osmand.plus.OsmandSettings;
+import com.tilushq.osmand.plus.R;
+import com.tilushq.osmand.plus.access.RelativeDirectionStyle;
+
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.DialogInterface;

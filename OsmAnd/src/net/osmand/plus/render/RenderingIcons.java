@@ -16,16 +16,15 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.Drawable;
-import android.util.DisplayMetrics;
-import android.view.WindowManager;
 
 public class RenderingIcons {
 	private static final Log log = PlatformUtil.getLog(RenderingIcons.class);
 	
 	private static Map<String, Integer> icons = new LinkedHashMap<String, Integer>();
+	private static Map<String, Integer> smallIcons = new LinkedHashMap<String, Integer>();
 	private static Map<String, Integer> bigIcons = new LinkedHashMap<String, Integer>();
 	private static Map<String, Bitmap> iconsBmp = new LinkedHashMap<String, Bitmap>();
-	private static DisplayMetrics dm;
+//	private static DisplayMetrics dm;
 	
 	public static boolean containsIcon(String s){
 		return icons.containsKey(s);
@@ -83,20 +82,13 @@ public class RenderingIcons {
 	}
 	
 	public static Bitmap getIcon(Context ctx, String s) {
+		if(s == null) {
+			return null;
+		}
 		if (!iconsBmp.containsKey(s)) {
 			Integer resId = icons.get(s);
 			if (resId != null) {
-				if (dm == null) {
-					dm = new DisplayMetrics();
-					WindowManager wmgr = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
-					wmgr.getDefaultDisplay().getMetrics(dm);
-				}
-//				BitmapFactory.Options options = new BitmapFactory.Options();
-//	            options.inScaled = false;
-//	            options.inTargetDensity = dm.densityDpi;
-//				options.inDensity = dm.densityDpi;
 				Bitmap bmp = BitmapFactory.decodeResource(ctx.getResources(), resId, null);
-//				Bitmap bmp = UnscaledBitmapLoader.loadFromResource(ctx.getResources(), resId.intValue(), null, dm);
 				iconsBmp.put(s, bmp);
 			} else {
 				iconsBmp.put(s, null);
@@ -115,7 +107,15 @@ public class RenderingIcons {
 		for (Field f : cl.getDeclaredFields()) {
 			if (f.getName().startsWith("h_") || f.getName().startsWith("mm_")) {
 				try {
-					icons.put(f.getName().substring(f.getName().startsWith("mm_")? 3 : 2), f.getInt(null));
+					String id = f.getName().substring(f.getName().startsWith("mm_") ? 3 : 2);
+					int i = f.getInt(null);
+					// don't override shader or map icons (h) 
+					if(f.getName().startsWith("h_") || !icons.containsKey(id)) {
+						icons.put(id, i);
+					}
+					if(f.getName().startsWith("mm_")) {
+						smallIcons.put(id, i);
+					}
 				} catch (IllegalArgumentException e) {
 					e.printStackTrace();
 				} catch (IllegalAccessException e) {

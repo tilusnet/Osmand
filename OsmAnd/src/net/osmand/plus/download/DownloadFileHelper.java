@@ -14,9 +14,11 @@ import java.util.zip.ZipInputStream;
 import net.osmand.IProgress;
 import net.osmand.IndexConstants;
 import net.osmand.PlatformUtil;
-import net.osmand.plus.ClientContext;
+import net.osmand.osm.io.NetworkUtils;
+import net.osmand.plus.OsmandApplication;
 import net.osmand.plus.R;
 import net.osmand.plus.Version;
+import net.osmand.plus.helpers.FileNameTranslationHelper;
 import net.osmand.util.Algorithms;
 
 import org.apache.commons.logging.Log;
@@ -25,13 +27,13 @@ public class DownloadFileHelper {
 	
 	private final static Log log = PlatformUtil.getLog(DownloadFileHelper.class);
 	private static final int BUFFER_SIZE = 32256;
-	protected final int TRIES_TO_DOWNLOAD = 15;
-	protected final long TIMEOUT_BETWEEN_DOWNLOADS = 8000;
-	private final ClientContext ctx;
+	protected static final int TRIES_TO_DOWNLOAD = 15;
+	protected static final long TIMEOUT_BETWEEN_DOWNLOADS = 8000;
+	private final OsmandApplication ctx;
 	private boolean interruptDownloading = false;
 	
 	
-	public DownloadFileHelper(ClientContext ctx){
+	public DownloadFileHelper(OsmandApplication ctx){
 		this.ctx = ctx;
 	}
 	
@@ -44,7 +46,7 @@ public class DownloadFileHelper {
 		return e != null && e.getMessage().equals("Interrupted");
 	}
 	
-	private InputStream getInputStreamToDownload(final URL url, final boolean forceWifi) throws IOException {
+	public InputStream getInputStreamToDownload(final URL url, final boolean forceWifi) throws IOException {
 		InputStream cis = new InputStream() {
 			byte[] buffer = new byte[BUFFER_SIZE];
 			int bufLen = 0;
@@ -66,7 +68,7 @@ public class DownloadFileHelper {
 							} catch (InterruptedException e) {
 							}
 						}
-						HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+						HttpURLConnection conn = NetworkUtils.getHttpURLConnection(url);
 						conn.setRequestProperty("User-Agent", Version.getFullVersion(ctx)); //$NON-NLS-1$
 						conn.setReadTimeout(30000);
 						if (fileread > 0) {
@@ -194,22 +196,16 @@ public class DownloadFileHelper {
 	}
 	
 	public boolean isWifiConnected(){
-		return ctx.getExternalServiceAPI().isWifiConnected();
+		return ctx.getSettings().isWifiConnected();
 	}
 	
 	public boolean downloadFile(DownloadEntry de, IProgress progress, 
 			List<File> toReIndex, DownloadFileShowWarning showWarningCallback, boolean forceWifi) throws InterruptedException {
 		try {
 			final List<InputStream> downloadInputStreams = new ArrayList<InputStream>();
-			if (de.parts == 1) {
-				URL url = new URL(de.urlToDownload); //$NON-NLS-1$
-				downloadInputStreams.add(getInputStreamToDownload(url, forceWifi));
-			} else {
-				for (int i = 1; i <= de.parts; i++) {
-					URL url = new URL(de.urlToDownload + "-" + i); //$NON-NLS-1$
-					downloadInputStreams.add(getInputStreamToDownload(url, forceWifi));
-				}
-			}
+			URL url = new URL(de.urlToDownload); //$NON-NLS-1$
+			log.debug("Url downloading " + de.urlToDownload);
+			downloadInputStreams.add(getInputStreamToDownload(url, forceWifi));
 			de.fileToDownload = de.targetFile;
 			if(!de.unzipFolder) {
 				de.fileToDownload = new File(de.targetFile.getParentFile(), de.targetFile.getName() +".download");
@@ -219,19 +215,39 @@ public class DownloadFileHelper {
 				Algorithms.removeAllFiles(de.targetFile);
 				boolean renamed = de.fileToDownload.renameTo(de.targetFile);
 				if(!renamed) {
-					showWarningCallback.showWarning(ctx.getString(R.string.error_io_error) + " : old file can't be deleted");
+					showWarningCallback.showWarning(ctx.getString(R.string.shared_string_io_error) + " : old file can't be deleted");
 					return false;
 				}
 			}
+			if (de.type == DownloadActivityType.VOICE_FILE){
+				copyVoiceConfig(de);
+			}
 			toReIndex.add(de.targetFile);
-			showWarningCallback.showWarning(ctx.getString(R.string.download_index_success));
+			showWarningCallback.showWarning(ctx.getString(R.string.shared_string_download_successful));
 			return true;
 		} catch (IOException e) {
 			log.error("Exception ocurred", e); //$NON-NLS-1$
-			showWarningCallback.showWarning(ctx.getString(R.string.error_io_error) + " : " + e.getMessage());
+			showWarningCallback.showWarning(ctx.getString(R.string.shared_string_io_error) + " : " + e.getMessage());
 			// Possibly file is corrupted
 			Algorithms.removeAllFiles(de.fileToDownload);
 			return false;
+		}
+	}
+
+	private void copyVoiceConfig(DownloadEntry de) {
+		File f = ctx.getAppPath("/voice/" + de.baseName + "/_config.p");
+		if (f.exists()) try {
+			InputStream is = ctx.getAssets().open("voice/" + de.baseName + "/config.p");
+			int size = is.available();
+			byte[] buffer = new byte[size];
+			is.read(buffer);
+			is.close();
+
+			FileOutputStream fos = new FileOutputStream(f);
+			fos.write(buffer);
+			fos.close();
+		} catch (Exception ex){
+			log.debug(ex.getMessage());
 		}
 	}
 
@@ -242,7 +258,9 @@ public class DownloadFileHelper {
 		if(mb == 0) {
 			mb = 1;
 		}
-		String taskName = ctx.getString(R.string.downloading_file_new) + " " + de.baseName /*+ " " + mb + " MB"*/;
+		String taskName = ctx.getString(R.string.shared_string_downloading) + " " + 
+		//+ de.baseName /*+ " " + mb + " MB"*/;
+		FileNameTranslationHelper.getFileName(ctx, ctx.getRegions(), de.baseName);
 		
 		progress.startTask(taskName, len / 1024);
 		if (!de.zipStream) {
@@ -288,6 +306,7 @@ public class DownloadFileHelper {
 
 	private void copyFile(DownloadEntry de, IProgress progress, CountingMultiInputStream countIS, int length, InputStream toRead, File targetFile)
 			throws IOException {
+		targetFile.getParentFile().mkdirs();
 		FileOutputStream out = new FileOutputStream(targetFile);
 		int read;
 		byte[] buffer = new byte[BUFFER_SIZE];
@@ -298,10 +317,7 @@ public class DownloadFileHelper {
 			progress.remaining(remaining / 1024);
 		}
 		out.close();
-
-		if (de.dateModified != null) {
-			targetFile.setLastModified(de.dateModified);
-		}
+		targetFile.setLastModified(de.dateModified);
 	}
 	
 	

@@ -11,11 +11,12 @@ import java.util.List;
 
 import net.osmand.IndexConstants;
 import net.osmand.PlatformUtil;
-import net.osmand.plus.ClientContext;
+import net.osmand.plus.ApplicationMode;
+import net.osmand.plus.OsmandApplication;
 import net.osmand.plus.OsmandSettings;
 import net.osmand.plus.OsmandSettings.MetricsConstants;
 import net.osmand.plus.R;
-import net.osmand.plus.api.ExternalServiceAPI.AudioFocusHelper;
+import net.osmand.plus.api.AudioFocusHelper;
 
 import org.apache.commons.logging.Log;
 
@@ -34,7 +35,7 @@ public abstract class AbstractPrologCommandPlayer implements CommandPlayer {
 
 	private static final Log log = PlatformUtil.getLog(AbstractPrologCommandPlayer.class);
 
-	protected ClientContext ctx;
+	protected OsmandApplication ctx;
 	protected File voiceDir;
 	protected Prolog prologSystem;
 	protected static final String P_VERSION = "version";
@@ -51,10 +52,11 @@ public abstract class AbstractPrologCommandPlayer implements CommandPlayer {
 	/** Must be sorted array! */
 	private final int[] sortedVoiceVersions;
 	private AudioFocusHelper mAudioFocusHelper;
-
+	protected String language = "";
 	protected int streamType;
+	private int currentVersion;
 
-	protected AbstractPrologCommandPlayer(ClientContext ctx, String voiceProvider, String configFile, int[] sortedVoiceVersions)
+	protected AbstractPrologCommandPlayer(OsmandApplication ctx, String voiceProvider, String configFile, int[] sortedVoiceVersions)
 		throws CommandPlayerException 
 	{
 		this.ctx = ctx;
@@ -72,11 +74,21 @@ public abstract class AbstractPrologCommandPlayer implements CommandPlayer {
 		}
 		this.streamType = ctx.getSettings().AUDIO_STREAM_GUIDANCE.get();  
 		init(voiceProvider, ctx.getSettings(), configFile);
+        final Term langVal = solveSimplePredicate("language");
+        if (langVal instanceof Struct) {
+            language = ((Struct) langVal).getName();
+        }
 	}
+
+    public String getLanguage() {
+        return language;
+    }
+
+
 	
 	public String[] getLibraries(){
 		return new String[] { "alice.tuprolog.lib.BasicLibrary",
-					"alice.tuprolog.lib.ISOLibrary"};
+					"alice.tuprolog.lib.ISOLibrary"/*, "alice.tuprolog.lib.IOLibrary"*/};
 	}
 
 	private void init(String voiceProvider, OsmandSettings settings, String configFile) throws CommandPlayerException {
@@ -107,8 +119,14 @@ public abstract class AbstractPrologCommandPlayer implements CommandPlayer {
 				config = new FileInputStream(new File(voiceDir, configFile)); //$NON-NLS-1$
 				// }
 				MetricsConstants mc = settings.METRIC_SYSTEM.get();
+				ApplicationMode m = settings.getApplicationMode();
+				if(m.getParent() != null) {
+					m = m.getParent();
+				}
+				prologSystem.addTheory(new Theory("appMode('"+m.getStringKey().toLowerCase()+"')."));
 				prologSystem.addTheory(new Theory("measure('"+mc.toTTSString()+"')."));
 				prologSystem.addTheory(new Theory(config));
+				config.close();
 			} catch (InvalidTheoryException e) {
 				log.error("Loading voice config exception " + voiceProvider, e); //$NON-NLS-1$
 				wrong = true;
@@ -123,6 +141,7 @@ public abstract class AbstractPrologCommandPlayer implements CommandPlayer {
 				if (!(val instanceof Number) ||  Arrays.binarySearch(sortedVoiceVersions,((Number)val).intValue()) < 0) {
 					throw new CommandPlayerException(ctx.getString(R.string.voice_data_not_supported));
 				}
+				currentVersion = ((Number)val).intValue();
 			}
 			if (log.isInfoEnabled()) {
 				log.info("Initializing voice subsystem  " + voiceProvider + " : " + (System.currentTimeMillis() - time)); //$NON-NLS-1$ //$NON-NLS-2$
@@ -153,6 +172,9 @@ public abstract class AbstractPrologCommandPlayer implements CommandPlayer {
 		if(prologSystem == null) {
 			return files;
 		}
+		if (log.isInfoEnabled()) {
+			log.info("Query speak files " + listCmd);
+		}
 		SolveInfo res = prologSystem.solve(new Struct(P_RESOLVE, list, result));
 		
 		if (res.isSuccess()) {
@@ -171,7 +193,14 @@ public abstract class AbstractPrologCommandPlayer implements CommandPlayer {
 			} catch (NoSolutionException e) {
 			}
 		}
+		if (log.isInfoEnabled()) {
+			log.info("Speak files " + files);
+		}
 		return files;
+	}
+	
+	public int getCurrentVersion() {
+		return currentVersion;
 	}
 	
 	@Override
@@ -200,10 +229,21 @@ public abstract class AbstractPrologCommandPlayer implements CommandPlayer {
 	
 	protected void requestAudioFocus() {
 		log.debug("requestAudioFocus");
-		mAudioFocusHelper = ctx.getExternalServiceAPI().getAudioFocuseHelper();
+		if (android.os.Build.VERSION.SDK_INT >= 8) {
+			mAudioFocusHelper = getAudioFocus();
+		}
 		if (mAudioFocusHelper != null) {
 			mAudioFocusHelper.requestFocus(ctx, streamType);
 		}
+	}
+
+	private AudioFocusHelper getAudioFocus() {
+		try {
+			return new net.osmand.plus.api.AudioFocusHelperImpl();
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
+		}
+		return null;
 	}
 	
 	protected void abandonAudioFocus() {

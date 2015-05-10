@@ -8,6 +8,7 @@ import gnu.trove.map.hash.TLongObjectHashMap;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -16,17 +17,13 @@ import net.osmand.PlatformUtil;
 import net.osmand.ResultMatcher;
 import net.osmand.binary.BinaryMapIndexReader.SearchRequest;
 import net.osmand.binary.OsmandOdb.IdTable;
-import net.osmand.binary.OsmandOdb.OsmAndRoutingIndex.RouteBorderBox;
-import net.osmand.binary.OsmandOdb.OsmAndRoutingIndex.RouteBorderLine;
-import net.osmand.binary.OsmandOdb.OsmAndRoutingIndex.RouteBorderLine.Builder;
-import net.osmand.binary.OsmandOdb.OsmAndRoutingIndex.RouteBorderPoint;
-import net.osmand.binary.OsmandOdb.OsmAndRoutingIndex.RouteBorderPointsBlock;
 import net.osmand.binary.OsmandOdb.OsmAndRoutingIndex.RouteDataBlock;
 import net.osmand.binary.OsmandOdb.OsmAndRoutingIndex.RouteDataBox;
 import net.osmand.binary.OsmandOdb.OsmAndRoutingIndex.RouteEncodingRule;
 import net.osmand.binary.OsmandOdb.RestrictionData;
 import net.osmand.binary.OsmandOdb.RouteData;
 import net.osmand.util.MapUtils;
+import net.osmand.util.OpeningHoursParser;
 
 import org.apache.commons.logging.Log;
 
@@ -37,6 +34,13 @@ import com.google.protobuf.WireFormat;
 public class BinaryMapRouteReaderAdapter {
 	protected static final Log LOG = PlatformUtil.getLog(BinaryMapRouteReaderAdapter.class);
 	private static final int SHIFT_COORDINATES = 4;
+
+    private static class RouteTypeCondition {
+
+        String condition = "";
+        OpeningHoursParser.OpeningHours hours = null;
+        float floatValue;
+    }
 	
 	public static class RouteTypeRule {
 		private final static int ACCESS = 1;
@@ -52,6 +56,7 @@ public class BinaryMapRouteReaderAdapter {
 		private int intValue;
 		private float floatValue;
 		private int type;
+        private List<RouteTypeCondition> conditions = null;
 
 		public RouteTypeRule(String t, String v) {
 			this.t = t.intern();
@@ -62,7 +67,12 @@ public class BinaryMapRouteReaderAdapter {
 				v = "no";
 			}
 			this.v = v == null? null : v.intern();
-			analyze();
+			try {
+				analyze();
+			} catch(RuntimeException e) {
+				System.err.println("Error analyzing tag/value = " + t + "/" +v);
+				throw e;
+			}
 		}
 		
 		public String getTag() {
@@ -80,6 +90,10 @@ public class BinaryMapRouteReaderAdapter {
 		public int getType() {
 			return type;
 		}
+
+        public boolean conditional() {
+            return conditions != null;
+        }
 		
 		public int onewayDirection(){
 			if(type == ONEWAY){
@@ -90,6 +104,15 @@ public class BinaryMapRouteReaderAdapter {
 		
 		public float maxSpeed(){
 			if(type == MAXSPEED){
+                if(conditions != null) {
+                    Calendar i = Calendar.getInstance();
+                    i.setTimeInMillis(System.currentTimeMillis());
+                    for(RouteTypeCondition c : conditions) {
+                        if(c.hours != null && c.hours.isOpenedForTime(i)) {
+                            return c.floatValue;
+                        }
+                    }
+                }
 				return floatValue;
 			}
 			return -1;
@@ -131,25 +154,27 @@ public class BinaryMapRouteReaderAdapter {
 				type = HIGHWAY_TYPE;
 			} else if(t.startsWith("access") && v != null){
 				type = ACCESS;
+            } else if(t.equalsIgnoreCase("maxspeed:conditional") && v != null){
+                conditions = new ArrayList<RouteTypeCondition>();
+                String[] cts = v.split(";");
+                for(String c : cts) {
+                    int ch = c.indexOf('@');
+	                if (ch > 0) {
+		                RouteTypeCondition cond = new RouteTypeCondition();
+		                cond.floatValue = RouteDataObject.parseSpeed(c.substring(0, ch), 0);
+		                cond.condition = c.substring(ch + 1).trim();
+		                if (cond.condition.startsWith("(") && cond.condition.endsWith(")")) {
+			                cond.condition = cond.condition.substring(1, cond.condition.length() - 1).trim();
+		                }
+		                cond.hours = OpeningHoursParser.parseOpenedHours(cond.condition);
+		                conditions.add(cond);
+	                }
+                }
+                type = MAXSPEED;
 			} else if(t.equalsIgnoreCase("maxspeed") && v != null){
 				type = MAXSPEED;
-				floatValue = -1;
-				if(v.equals("none")) {
-					floatValue = RouteDataObject.NONE_MAX_SPEED;
-				} else {
-					int i = 0;
-					while (i < v.length() && Character.isDigit(v.charAt(i))) {
-						i++;
-					}
-					if (i > 0) {
-						floatValue = Integer.parseInt(v.substring(0, i));
-						floatValue /= 3.6; // km/h -> m/s
-						if (v.contains("mph")) {
-							floatValue *= 1.6;
-						}
-					}
-				}
-			} else if (t.equalsIgnoreCase("lanes") && v != null) {
+				floatValue = RouteDataObject.parseSpeed(v, 0);
+            } else if (t.equalsIgnoreCase("lanes") && v != null) {
 				intValue = -1;
 				int i = 0;
 				type = LANES;
@@ -162,15 +187,12 @@ public class BinaryMapRouteReaderAdapter {
 			}
 			
 		}
+
+		
 	}
 	
 	public static class RouteRegion extends BinaryIndexPart {
 		public int regionsRead;
-		public int borderBoxPointer = 0;
-		public int baseBorderBoxPointer = 0;
-		public int borderBoxLength = 0;
-		public int baseBorderBoxLength = 0;
-		
 		List<RouteSubregion> subregions = new ArrayList<RouteSubregion>();
 		List<RouteSubregion> basesubregions = new ArrayList<RouteSubregion>();
 		List<RouteTypeRule> routeEncodingRules = new ArrayList<BinaryMapRouteReaderAdapter.RouteTypeRule>();
@@ -178,22 +200,25 @@ public class BinaryMapRouteReaderAdapter {
 		int nameTypeRule = -1;
 		int refTypeRule = -1;
 		int destinationTypeRule = -1;
+		int destinationRefTypeRule = -1;
 		
 		public RouteTypeRule quickGetEncodingRule(int id) {
 			return routeEncodingRules.get(id);
 		}
 
 		private void initRouteEncodingRule(int id, String tags, String val) {
-			while(routeEncodingRules.size() <= id) {
+			while (routeEncodingRules.size() <= id) {
 				routeEncodingRules.add(null);
 			}
 			routeEncodingRules.set(id, new RouteTypeRule(tags, val));
-			if(tags.equals("name")) {
+			if (tags.equals("name")) {
 				nameTypeRule = id;
-			} else if(tags.equals("ref")) {
+			} else if (tags.equals("ref")) {
 				refTypeRule = id;
-			} else if(tags.equals("destination")) {
+			} else if (tags.equals("destination")) {
 				destinationTypeRule = id;
+			} else if (tags.equals("destination:ref")) {
+				destinationRefTypeRule = id;
 			}
 		}
 		
@@ -235,6 +260,15 @@ public class BinaryMapRouteReaderAdapter {
 				l = Math.max(l, MapUtils.get31LatitudeY(s.top));
 			}
 			return l;
+		}
+
+		public boolean contains(int x31, int y31) {
+			for(RouteSubregion s : subregions) {
+				if(s.left <= x31 && s.right >= x31 && s.top <= y31 && s.bottom >= y31) {
+					return true;
+				}
+			}
+			return false;
 		}
 	}
 	
@@ -336,20 +370,6 @@ public class BinaryMapRouteReaderAdapter {
 				}
 				codedIS.skipRawBytes(codedIS.getBytesUntilLimit());
 				codedIS.popLimit(oldLimit);
-				break;
-			}
-			case OsmandOdb.OsmAndRoutingIndex.BASEBORDERBOX_FIELD_NUMBER: 
-			case OsmandOdb.OsmAndRoutingIndex.BORDERBOX_FIELD_NUMBER: {
-				int length = readInt();
-				int filePointer = codedIS.getTotalBytesRead();
-				if(tag == OsmandOdb.OsmAndRoutingIndex.BORDERBOX_FIELD_NUMBER) {
-					region.borderBoxLength = length;
-					region.borderBoxPointer = filePointer;
-				} else {
-					region.baseBorderBoxLength = length;
-					region.baseBorderBoxPointer = filePointer;
-				}
-				codedIS.skipRawBytes(length);
 				break;
 			}
 			case OsmandOdb.OsmAndRoutingIndex.BLOCKS_FIELD_NUMBER : {
@@ -662,7 +682,7 @@ public class BinaryMapRouteReaderAdapter {
 		}
 	}
 	
-	public void initRouteTypesIfNeeded(SearchRequest<RouteDataObject> req, List<RouteSubregion> list) throws IOException {
+	public void initRouteTypesIfNeeded(SearchRequest<?> req, List<RouteSubregion> list) throws IOException {
 		for (RouteSubregion rs : list) {
 			if (req.intersects(rs.left, rs.top, rs.right, rs.bottom)) {
 				initRouteRegion(rs.routeReg);
@@ -724,7 +744,7 @@ public class BinaryMapRouteReaderAdapter {
 		}
 	}
 
-	public List<RouteSubregion> searchRouteRegionTree(SearchRequest<RouteDataObject> req, List<RouteSubregion> list, 
+	public List<RouteSubregion> searchRouteRegionTree(SearchRequest<?> req, List<RouteSubregion> list, 
 			List<RouteSubregion> toLoad) throws IOException {
 		for (RouteSubregion rs : list) {
 			if (req.intersects(rs.left, rs.top, rs.right, rs.bottom)) {
@@ -744,165 +764,6 @@ public class BinaryMapRouteReaderAdapter {
 		return toLoad;
 	}
 	
-	public List<RouteDataBorderLinePoint> searchBorderPoints(SearchRequest<RouteDataBorderLinePoint> req, RouteRegion r) throws IOException {
-		if(r.borderBoxPointer != 0) {
-			codedIS.seek(r.borderBoxPointer);
-			int old = codedIS.pushLimit(r.borderBoxLength);
-			TIntArrayList blocksToRead = new TIntArrayList();
-			readBorderLines(req, blocksToRead);
-			
-			blocksToRead.sort();
-			for(int j = 0; j< blocksToRead.size() ; j++) {
-				codedIS.seek(blocksToRead.get(j));
-				int len = codedIS.readRawVarint32();
-				int oldLimit = codedIS.pushLimit(len);
-				readBorderLinePoints(req, r);
-				codedIS.popLimit(oldLimit);
-			}
-			codedIS.popLimit(old);
-			
-		}
-		return req.getSearchResults();
-	}
-	
-	
-	private void readBorderLinePoints(SearchRequest<RouteDataBorderLinePoint> req, RouteRegion r) throws IOException {
-		int x = 0;
-		int y = 0;
-		long id = 0;
-		while (true) {
-			int t = codedIS.readTag();
-			int tag = WireFormat.getTagFieldNumber(t);
-			switch (tag) {
-			case 0:
-				return;
-			case RouteBorderPointsBlock.X_FIELD_NUMBER: {
-				x = codedIS.readInt32();
-				break;
-			}
-			case RouteBorderPointsBlock.Y_FIELD_NUMBER: {
-				y = codedIS.readInt32();
-				break;
-			}
-			case RouteBorderPointsBlock.BASEID_FIELD_NUMBER: {
-				id = codedIS.readInt64();
-				break;
-			}
-			case RouteBorderPointsBlock.POINTS_FIELD_NUMBER:
-				int len = codedIS.readRawVarint32();
-				int oldLimit = codedIS.pushLimit(len);
-				RouteDataBorderLinePoint p = readBorderLinePoint(new RouteDataBorderLinePoint(r), x, y, id);
-				codedIS.popLimit(oldLimit);
-				x = p.x;
-				y = p.y;
-				id = p.id;
-				req.publish(p);
-				break;
-			default:
-				skipUnknownField(t);
-				break;
-			}
-		}
-		
-	}
-	
-	private RouteDataBorderLinePoint readBorderLinePoint(RouteDataBorderLinePoint p, int x, int y, long id) throws IOException {
-		while (true) {
-			int t = codedIS.readTag();
-			int tag = WireFormat.getTagFieldNumber(t);
-			switch (tag) {
-			case 0:
-				return p;
-			case RouteBorderPoint.DX_FIELD_NUMBER:
-				p.x =  x + codedIS.readInt32();
-				break;
-			case RouteBorderPoint.DY_FIELD_NUMBER:
-				p.y =  y + codedIS.readInt32();
-				break;
-			case RouteBorderPoint.ROADID_FIELD_NUMBER:
-				p.id =  id + codedIS.readSInt64();
-				break;
-			case RouteBorderPoint.DIRECTION_FIELD_NUMBER:
-				p.direction = codedIS.readBool();
-				break;
-			case RouteBorderPoint.TYPES_FIELD_NUMBER:
-				TIntArrayList types = new TIntArrayList();
-				int len = codedIS.readRawVarint32();
-				int oldLimit = codedIS.pushLimit(len);
-				while(codedIS.getBytesUntilLimit() > 0) {
-					types.add(codedIS.readRawVarint32());
-				}
-				codedIS.popLimit(oldLimit);
-				p.types = types.toArray();
-				break;
-			default:
-				skipUnknownField(t);
-				break;
-			}
-		}
-	}
-
-	private void readBorderLines(SearchRequest<RouteDataBorderLinePoint> req, TIntArrayList blocksToRead) throws IOException {
-		while (true) {
-			int t = codedIS.readTag();
-			int tag = WireFormat.getTagFieldNumber(t);
-			switch (tag) {
-			case 0:
-				return;
-			case RouteBorderBox.BORDERLINES_FIELD_NUMBER: {
-				int fp = codedIS.getTotalBytesRead();
-				int length = codedIS.readRawVarint32();
-				int old = codedIS.pushLimit(length);
-				
-				RouteBorderLine ln = readBorderLine();
-				if(ln.hasTox() && req.intersects(ln.getX(), ln.getY(), ln.getTox(), ln.getY())) {
-					blocksToRead.add(ln.getShiftToPointsBlock() + fp);
-					// FIXME borders approach
-//				} else if(ln.hasToy() && req.intersects(ln.getX(), ln.getY(), ln.getX(), ln.getToy())) {
-//					blocksToRead.add(ln.getShiftToPointsBlock() + fp);
-				} 
-				codedIS.popLimit(old);
-				break;
-			}
-			case RouteBorderBox.BLOCKS_FIELD_NUMBER:
-				return;
-			default:
-				skipUnknownField(t);
-				break;
-			}
-		}
-		
-	}
-
-	private RouteBorderLine readBorderLine() throws IOException {
-		Builder bld = RouteBorderLine.newBuilder();
-		while (true) {
-			int t = codedIS.readTag();
-			int tag = WireFormat.getTagFieldNumber(t);
-			switch (tag) {
-			case 0:
-				return bld.build();
-			case RouteBorderLine.X_FIELD_NUMBER:
-				bld.setX(codedIS.readInt32());
-				break;
-			case RouteBorderLine.Y_FIELD_NUMBER:
-				bld.setY(codedIS.readInt32());
-				break;
-			case RouteBorderLine.TOX_FIELD_NUMBER:
-				bld.setTox(codedIS.readInt32());
-				break;
-			case RouteBorderLine.TOY_FIELD_NUMBER:
-				bld.setToy(codedIS.readInt32());
-				break;
-			case RouteBorderLine.SHIFTTOPOINTSBLOCK_FIELD_NUMBER:
-				bld.setShiftToPointsBlock(readInt());
-				break;
-			default:
-				skipUnknownField(t);
-				break;
-			}
-		}
-	}
 
 	public List<RouteSubregion> loadInteresectedPoints(SearchRequest<RouteDataObject> req, List<RouteSubregion> list, 
 			List<RouteSubregion> toLoad) throws IOException {

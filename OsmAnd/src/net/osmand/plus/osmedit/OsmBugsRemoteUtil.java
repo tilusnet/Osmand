@@ -11,6 +11,7 @@ import java.net.URLEncoder;
 
 import net.osmand.PlatformUtil;
 import net.osmand.osm.io.Base64;
+import net.osmand.osm.io.NetworkUtils;
 import net.osmand.plus.OsmandApplication;
 import net.osmand.plus.OsmandSettings;
 import net.osmand.plus.R;
@@ -21,8 +22,22 @@ import org.apache.commons.logging.Log;
 public class OsmBugsRemoteUtil implements OsmBugsUtil {
 
 	private static final Log log = PlatformUtil.getLog(OsmBugsRemoteUtil.class);
-
-	private final static String SITE_API = "http://api.openstreetmap.org/api/0.6/notes"; //$NON-NLS-1$
+	
+	static String getNotesApi()
+	{
+		final int deviceApiVersion = android.os.Build.VERSION.SDK_INT;
+		
+		String RETURN_API;
+		
+		if (deviceApiVersion >= android.os.Build.VERSION_CODES.GINGERBREAD) {
+			RETURN_API = "https://api.openstreetmap.org/api/0.6/notes";
+		}
+		else {
+			RETURN_API = "http://api.openstreetmap.org/api/0.6/notes";
+		}
+	
+		return RETURN_API;
+	}
 
 	private OsmandApplication app;
 	private OsmandSettings settings;
@@ -33,9 +48,9 @@ public class OsmBugsRemoteUtil implements OsmBugsUtil {
 	}
 
 	@Override
-	public String createNewBug(double latitude, double longitude, String text){
+	public String createNewBug(double latitude, double longitude, String text, String author){
 		StringBuilder b = new StringBuilder();
-		b.append(SITE_API).append("?"); //$NON-NLS-1$
+		b.append(getNotesApi()).append("?"); //$NON-NLS-1$
 		b.append("lat=").append(latitude); //$NON-NLS-1$
 		b.append("&lon=").append(longitude); //$NON-NLS-1$
 		b.append("&text=").append(URLEncoder.encode(text)); //$NON-NLS-1$
@@ -43,18 +58,18 @@ public class OsmBugsRemoteUtil implements OsmBugsUtil {
 	}
 
 	@Override
-	public String addingComment(long id, String text){
+	public String addingComment(long id, String text, String author){
 		StringBuilder b = new StringBuilder();
-		b.append(SITE_API).append("/"); 
+		b.append(getNotesApi()).append("/"); 
 		b.append(id); //$NON-NLS-1$
 		b.append("/comment?text=").append(URLEncoder.encode(text)); //$NON-NLS-1$
 		return editingPOI(b.toString(), "POST", "adding comment"); //$NON-NLS-1$
 	}
 
 	@Override
-	public String closingBug(long id, String text){
+	public String closingBug(long id, String text, String author){
 		StringBuilder b = new StringBuilder();
-		b.append(SITE_API).append("/"); 
+		b.append(getNotesApi()).append("/"); 
 		b.append(id); //$NON-NLS-1$
 		b.append("/close?text=").append(URLEncoder.encode(text)); //$NON-NLS-1$
 		return editingPOI(b.toString(), "POST", "close bug") ; //$NON-NLS-1$
@@ -62,7 +77,7 @@ public class OsmBugsRemoteUtil implements OsmBugsUtil {
 
 	private String editingPOI(String url, String requestMethod, String userOperation) {
 		try {
-			HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+			HttpURLConnection connection = NetworkUtils.getHttpURLConnection(url);
 			log.info("Editing poi " + url);
 			connection.setConnectTimeout(15000);
 			connection.setRequestMethod(requestMethod);
@@ -107,11 +122,11 @@ public class OsmBugsRemoteUtil implements OsmBugsUtil {
 						responseBody.append(s);
 					}
 				}
-				log.info("Response : " + responseBody.toString()); //$NON-NLS-1$
+				log.info("Response : " + responseBody); //$NON-NLS-1$
 			}
 			connection.disconnect();
 			if (!ok) {
-				return msg + "\n" + responseBody.toString();
+				return msg + "\n" + responseBody;
 			}
 		} catch (NullPointerException e) {
 			// that's tricky case why NPE is thrown to fix that problem httpClient could be used

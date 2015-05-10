@@ -7,6 +7,7 @@ import java.text.MessageFormat;
 
 import net.osmand.binary.BinaryMapRouteReaderAdapter.RouteRegion;
 import net.osmand.binary.BinaryMapRouteReaderAdapter.RouteTypeRule;
+import net.osmand.util.Algorithms;
 
 public class RouteDataObject {
 	/*private */static final int RESTRICTION_SHIFT = 3;
@@ -60,15 +61,23 @@ public class RouteDataObject {
 		return null;
 	}
 	
+	public TIntObjectHashMap<String> getNames() {
+		return names;
+	}
+	
 	public String getRef(){
-		if(names != null ) {
+		if (names != null) {
+			String ref = names.get(region.destinationRefTypeRule);
+			if (ref != null) {
+				return ref;
+			}
 			return names.get(region.refTypeRule);
 		}
 		return null;
 	}
 
 	public String getDestinationName(){
-		if(names != null ) {
+		if(names != null) {
 			return names.get(region.destinationTypeRule);
 		}
 		return null;
@@ -144,14 +153,82 @@ public class RouteDataObject {
 	
 	public float getMaximumSpeed(){
 		int sz = types.length;
+        float maxSpeed = 0;
 		for (int i = 0; i < sz; i++) {
 			RouteTypeRule r = region.quickGetEncodingRule(types[i]);
-			float maxSpeed = r.maxSpeed();
-			if (maxSpeed > 0) {
-				return maxSpeed;
+            float mx = r.maxSpeed();
+            if (mx > 0) {
+                maxSpeed = mx;
+                // conditional has priority
+                if(r.conditional()) {
+                    break;
+                }
+            }
+		}
+		return maxSpeed ;
+	}
+	
+	
+	public static float parseSpeed(String v, float def) {
+		if(v.equals("none")) {
+			return RouteDataObject.NONE_MAX_SPEED;
+		} else {
+			int i = Algorithms.findFirstNumberEndIndex(v);
+			if (i > 0) {
+				float f = Float.parseFloat(v.substring(0, i));
+				f /= 3.6; // km/h -> m/s
+				if (v.contains("mph")) {
+					f *= 1.6;
+				}
+				return f;
 			}
 		}
-		return 0;
+		return def;
+	}
+	
+	public static float parseLength(String v, float def) {
+		float f = 0;
+		// 14'10" 14 - inches, 10 feet
+		int i = Algorithms.findFirstNumberEndIndex(v);
+		if (i > 0) {
+			f += Float.parseFloat(v.substring(0, i));
+			String pref = v.substring(i, v.length()).trim();
+			float add = 0;
+			for(int ik = 0; ik < pref.length(); ik++) {
+				if(Character.isDigit(pref.charAt(ik)) || pref.charAt(ik) == '.' || pref.charAt(ik) == '-') {
+					int first = Algorithms.findFirstNumberEndIndex(pref.substring(ik));
+					if(first != -1) {
+						add = parseLength(pref.substring(ik), 0);
+						pref = pref.substring(0, ik);
+					}
+					break;
+				}
+			}
+			if(pref.contains("km")) {
+				f *= 1000;  
+			}
+			if(pref.contains("\"")) {
+				f *= 0.0254; 
+			} else if (pref.contains("\'") || pref.contains("ft")) {
+				// foot to meters
+				f *= 0.3048;
+			}
+			return f + add;
+		}
+		return def;
+	}
+	
+	public static float parseWeightInTon(String v, float def) {
+		int i = Algorithms.findFirstNumberEndIndex(v);
+		if (i > 0) {
+			float f = Float.parseFloat(v.substring(0, i));
+			if (v.contains("\"") || v.contains("lbs")) {
+				// lbs -> kg -> ton
+				f = (f * 0.4535f) / 1000f;
+			}
+			return f;
+		}
+		return def;
 	}
 	
 	public boolean loop(){
@@ -165,6 +242,20 @@ public class RouteDataObject {
 			if(r.roundabout()) {
 				return true;
 			} else if(r.onewayDirection() != 0 && loop()) {
+				return true;
+			}
+		}
+		return false;
+	}
+	
+	public boolean tunnel(){
+		int sz = types.length;
+		for(int i=0; i<sz; i++) {
+			RouteTypeRule r = region.quickGetEncodingRule(types[i]);
+			if(r.getTag().equals("tunnel") && r.getValue().equals("yes")) {
+				return true;
+			}
+			if(r.getTag().equals("layer") && r.getValue().equals("-1")) {
 				return true;
 			}
 		}
@@ -197,6 +288,16 @@ public class RouteDataObject {
 
 	public String getHighway() {
 		return getHighway(types, region);
+	}
+
+	public String getValue(String tag) {
+		for (int i = 0; i < types.length; i++) {
+			RouteTypeRule r = region.quickGetEncodingRule(types[i]);
+			if (r.getTag().equals(tag)) {
+				return r.getValue();
+			}
+		}
+		return null;
 	}
 	
 	public static String getHighway(int[] types, RouteRegion region) {
@@ -231,6 +332,24 @@ public class RouteDataObject {
 		// So it should be fix in both places
 		return directionRoute(startPoint, plus, 5);
 	}
+	
+	public double distance(int startPoint, int endPoint) {
+		if(startPoint > endPoint) {
+			int k = endPoint;
+			endPoint = startPoint;
+			startPoint = k;
+		}
+		double d = 0;
+		for(int k = startPoint; k < endPoint && k < getPointsLength() -1; k++) {
+			int x = getPoint31XTile(k);
+			int y = getPoint31YTile(k);
+			int kx = getPoint31XTile(k + 1);
+			int ky = getPoint31YTile(k + 1);
+			d += simplifyDistance(kx, ky, x, y);
+			
+		}
+		return d;
+	}
 
 	// Gives route direction of EAST degrees from NORTH ]-PI, PI]
 	public double directionRoute(int startPoint, boolean plus, float dist) {
@@ -255,10 +374,36 @@ public class RouteDataObject {
 			px = getPoint31XTile(nx);
 			py = getPoint31YTile(nx);
 			// translate into meters
-			total += Math.abs(px - x) * 0.011d + Math.abs(py - y) * 0.01863d;
+			total += simplifyDistance(x, y, px, py);
 		} while (total < dist);
 		return -Math.atan2( x - px, y - py );
 	}
+
+	private double simplifyDistance(int x, int y, int px, int py) {
+		return Math.abs(px - x) * 0.011d + Math.abs(py - y) * 0.01863d;
+	}
+	
+	private static void assertTrueLength(String vl, float exp){
+		float dest = parseLength(vl, 0);
+		if(exp != dest) {
+			System.err.println("FAIL " + vl + " " + dest);
+		} else {
+			System.out.println("OK " + vl);
+		}
+	}
+	
+	public static void main(String[] args) {
+		assertTrueLength("10 km", 10000);
+		assertTrueLength("0.01 km", 10);
+		assertTrueLength("0.01 km 10 m", 20);
+		assertTrueLength("10 m", 10);
+		assertTrueLength("10m", 10);
+		assertTrueLength("3.4 m", 3.4f);
+		assertTrueLength("14'10\"", 4.5212f);
+		assertTrueLength("14.5'", 4.4196f);
+		assertTrueLength("15ft", 4.572f);
+	}
+	
 	
 	@Override
 	public String toString() {

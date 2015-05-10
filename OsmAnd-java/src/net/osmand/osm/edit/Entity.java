@@ -67,7 +67,7 @@ public abstract class Entity {
 		}
 
 		public String getOsmUrl() {
-			final String browseUrl = "http://www.openstreetmap.org/browse/";
+			final String browseUrl = "https://www.openstreetmap.org/browse/";
 			if (type == EntityType.NODE)
 				return browseUrl + "node/" + id;
 			if (type == EntityType.WAY)
@@ -121,10 +121,13 @@ public abstract class Entity {
 	}
 	
 	public String removeTag(String key){
-		return tags.remove(key);
+		if(tags != null) {
+			return tags.remove(key);
+		}
+		return null;
 	}
 	
-	public void removeTags(String[] keys){
+	public void removeTags(String... keys){
 		if (tags != null){
 			for (String key : keys){
 				tags.remove(key);
@@ -136,7 +139,11 @@ public abstract class Entity {
 		if(tags == null){
 			tags = new LinkedHashMap<String, String>();
 		}
-		return tags.put(key, value);
+		return tags.put(key.toLowerCase(), value);
+	}
+	
+	public void replaceTags(Map<String, String> toPut){
+		tags = new LinkedHashMap<String, String>(toPut);
 	}
 	
 	public String getTag(OSMTagKey key){
@@ -234,5 +241,12 @@ public abstract class Entity {
 	
 	public boolean isDataLoaded() {
 		return dataLoaded;
+	}
+
+	public Map<String, String> getModifiableTags() {
+		if(tags == null){
+			return Collections.emptyMap();
+		}
+		return tags;
 	}
 }

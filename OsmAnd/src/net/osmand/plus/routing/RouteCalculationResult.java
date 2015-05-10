@@ -8,16 +8,17 @@ import net.osmand.Location;
 import net.osmand.binary.BinaryMapRouteReaderAdapter.RouteRegion;
 import net.osmand.binary.BinaryMapRouteReaderAdapter.RouteTypeRule;
 import net.osmand.data.LatLon;
+import net.osmand.data.LocationPoint;
 import net.osmand.plus.ApplicationMode;
-import net.osmand.plus.ClientContext;
-import net.osmand.plus.OsmAndFormatter;
-import net.osmand.plus.OsmandSettings;
 import net.osmand.plus.R;
 import net.osmand.router.RouteSegmentResult;
 import net.osmand.router.TurnType;
+import net.osmand.util.Algorithms;
 import net.osmand.util.MapUtils;
+import android.content.Context;
 
 public class RouteCalculationResult {
+	private static double distanceClosestToIntermediate = 400;
 	// could not be null and immodifiable!
 	private final List<Location> locations;
 	private final List<RouteDirectionInfo> directions;
@@ -28,49 +29,67 @@ public class RouteCalculationResult {
 	private final int[] intermediatePoints;
 	private final float routingTime;
 	
+	protected int cacheCurrentTextDirectionInfo = -1;
+	protected List<RouteDirectionInfo> cacheAgreggatedDirections;
+	protected List<LocationPoint> locationPoints = new ArrayList<LocationPoint>();
 
 	// Note always currentRoute > get(currentDirectionInfo).routeOffset, 
 	//         but currentRoute <= get(currentDirectionInfo+1).routeOffset 
 	protected int currentDirectionInfo = 0;
 	protected int currentRoute = 0;
 	protected int nextIntermediate = 0;
-	protected int nextAlarmInfo = 0;
+	protected int currentWaypointGPX = 0;
+	protected int lastWaypointGPX = 0;
 
 	public RouteCalculationResult(String errorMessage) {
-		this(null, null, null, null, null, errorMessage, null, false, false);
-	}
-
-	public RouteCalculationResult(List<Location> list, List<RouteDirectionInfo> directions, Location start, LatLon end, 
-			List<LatLon> intermediates, String errorMessage, ClientContext ctx, boolean leftSide, boolean addMissingTurns) {
-		this.routingTime = 0;
 		this.errorMessage = errorMessage;
-		this.intermediatePoints = new int[intermediates == null ? 0 : intermediates.size()];
+		this.routingTime = 0;
+		this.intermediatePoints = new int[0];
+		this.locations = new ArrayList<Location>();
+		this.segments = new ArrayList<RouteSegmentResult>();
+		this.listDistance = new int[0];
+		this.directions = new ArrayList<RouteDirectionInfo>();
+		this.alarmInfo = new ArrayList<AlarmInfo>();
+	}
+	
+	public RouteCalculationResult(List<Location> list, List<RouteDirectionInfo> directions, RouteCalculationParams params, List<LocationPoint> waypoints
+			) {
+		this.routingTime = 0;
+		this.errorMessage = null;
+		this.intermediatePoints = new int[params.intermediates == null ? 0 : params.intermediates.size()];
 		List<Location> locations = list == null ? new ArrayList<Location>() : new ArrayList<Location>(list);
 		List<RouteDirectionInfo> localDirections = directions == null? new ArrayList<RouteDirectionInfo>() : new ArrayList<RouteDirectionInfo>(directions);
 		if (!locations.isEmpty()) {
 			checkForDuplicatePoints(locations, localDirections);
 		}
+		if(waypoints != null) {
+			this.locationPoints.addAll(waypoints);
+		}
+		boolean addMissingTurns = true;
 		if(addMissingTurns) {
 			removeUnnecessaryGoAhead(localDirections);
-			OsmandSettings settings = ctx.getSettings();
-			addMissingTurnsToRoute(locations, localDirections, start, end, settings.getApplicationMode(), ctx, leftSide);
+			addMissingTurnsToRoute(locations, localDirections, params.start,params.end, 
+					params.mode, params.ctx, params.leftSide);
 			// if there is no closest points to start - add it
-			introduceFirstPointAndLastPoint(locations, localDirections, null, start, end);
+			introduceFirstPointAndLastPoint(locations, localDirections, null, params.start, params.end);
 		}
 		
 		this.locations = Collections.unmodifiableList(locations);
 		this.segments = new ArrayList<RouteSegmentResult>();
 		this.listDistance = new int[locations.size()];
-		updateListDistanceTime();
+		updateListDistanceTime(this.listDistance, this.locations);
 		this.alarmInfo = new ArrayList<AlarmInfo>();
-		calculateIntermediateIndexes(ctx, intermediates, localDirections);
+		calculateIntermediateIndexes(params.ctx, this.locations, params.intermediates, localDirections, this.intermediatePoints);
 		this.directions = Collections.unmodifiableList(localDirections);
-		updateDirectionsTime();
+		updateDirectionsTime(this.directions, this.listDistance);
 	}
-	
+
 	public RouteCalculationResult(List<RouteSegmentResult> list, Location start, LatLon end, List<LatLon> intermediates,  
-			ClientContext ctx, boolean leftSide, float routingTime) {
+			Context ctx, boolean leftSide, float routingTime, List<LocationPoint> waypoints) {
 		this.routingTime = routingTime;
+		if(waypoints != null) {
+			this.locationPoints.addAll(waypoints);
+		}
 		List<RouteDirectionInfo> computeDirections = new ArrayList<RouteDirectionInfo>();
 		this.errorMessage = null;
 		this.intermediatePoints = new int[intermediates == null ? 0 : intermediates.size()];
@@ -82,16 +101,24 @@ public class RouteCalculationResult {
 		this.locations = Collections.unmodifiableList(locations);
 		this.segments = Collections.unmodifiableList(segments);
 		this.listDistance = new int[locations.size()];
-		calculateIntermediateIndexes(ctx, intermediates, computeDirections);
-		updateListDistanceTime();
+		calculateIntermediateIndexes(ctx, this.locations, intermediates, computeDirections, this.intermediatePoints);
+		updateListDistanceTime(this.listDistance, this.locations);
 		
 		this.directions = Collections.unmodifiableList(computeDirections);
-		updateDirectionsTime();
+		updateDirectionsTime(this.directions, this.listDistance);
 		this.alarmInfo = Collections.unmodifiableList(alarms);
-		 
+	}
+
+	public List<LocationPoint> getLocationPoints() {
+		return locationPoints;
 	}
 	
-	private void calculateIntermediateIndexes(ClientContext ctx, List<LatLon> intermediates, List<RouteDirectionInfo> localDirections) {
+	public List<AlarmInfo> getAlarmInfo() {
+		return alarmInfo;
+	}
+
+	private static void calculateIntermediateIndexes(Context ctx, List<Location> locations,
+			List<LatLon> intermediates, List<RouteDirectionInfo> localDirections, int[] intermediatePoints) {
 		if(intermediates != null && localDirections != null) {
 			int[] interLocations = new int[intermediates.size()];
 			int currentIntermediate = 0;
@@ -99,16 +126,16 @@ public class RouteCalculationResult {
 			double distanceThreshold = 25;
 			double prevDistance = distanceThreshold * 4;
 			while((currentIntermediate < intermediates.size() || prevDistance > distanceThreshold)
-				&& currentLocation < this.locations.size()){
-				if(currentIntermediate < intermediates.size() && 
-						getDistanceToLocation(intermediates.get(currentIntermediate), currentLocation) < 50) {
-					prevDistance = getDistanceToLocation(intermediates.get(currentIntermediate), currentLocation);
+				&& currentLocation < locations.size()){
+				if(currentIntermediate < intermediates.size() &&
+						getDistanceToLocation(locations, intermediates.get(currentIntermediate), currentLocation) < distanceClosestToIntermediate) {
+					prevDistance = getDistanceToLocation(locations, intermediates.get(currentIntermediate), currentLocation);
 					interLocations[currentIntermediate] = currentLocation;
 					currentIntermediate++;
 				} else if(currentIntermediate > 0 && prevDistance > distanceThreshold && 
-						getDistanceToLocation(intermediates.get(currentIntermediate - 1), 
+						getDistanceToLocation(locations, intermediates.get(currentIntermediate - 1), 
 						currentLocation) < prevDistance) {
-					prevDistance = getDistanceToLocation(intermediates.get(currentIntermediate - 1), currentLocation);
+					prevDistance = getDistanceToLocation(locations, intermediates.get(currentIntermediate - 1), currentLocation);
 					interLocations[currentIntermediate - 1] = currentLocation;
 				}
 				currentLocation ++;
@@ -120,9 +147,9 @@ public class RouteCalculationResult {
 				if (locationIndex >= interLocations[currentIntermediate]) {
 					// split directions
 					if (locationIndex > interLocations[currentIntermediate]
-							&& getDistanceToLocation(intermediates.get(currentIntermediate), locationIndex) > 50) {
+							&& getDistanceToLocation(locations, intermediates.get(currentIntermediate), locationIndex) > 50) {
 						RouteDirectionInfo toSplit = localDirections.get(currentDirection);
-						RouteDirectionInfo info = new RouteDirectionInfo(localDirections.get(currentDirection).getAverageSpeed(), TurnType.sraight());
+						RouteDirectionInfo info = new RouteDirectionInfo(localDirections.get(currentDirection).getAverageSpeed(), TurnType.straight());
 						info.setRef(toSplit.getRef());
 						info.setStreetName(toSplit.getStreetName());
 						info.setDestinationName(toSplit.getDestinationName());
@@ -138,18 +165,23 @@ public class RouteCalculationResult {
 		}
 	}
 
-	private double getDistanceToLocation(LatLon p, int currentLocation) {
+	private static double getDistanceToLocation(List<Location> locations, LatLon p, int currentLocation) {
 		return MapUtils.getDistance(p, 
-				this.locations.get(currentLocation).getLatitude(), this.locations.get(currentLocation).getLongitude());
+				locations.get(currentLocation).getLatitude(), locations.get(currentLocation).getLongitude());
 	}
 
-	private void attachAlarmInfo(List<AlarmInfo> alarms, RouteSegmentResult res, int intId, int locInd) {
+	private static void attachAlarmInfo(List<AlarmInfo> alarms, RouteSegmentResult res, int intId, int locInd) {
 		int[] pointTypes = res.getObject().getPointTypes(intId);
 		RouteRegion reg = res.getObject().region;
 		if (pointTypes != null) {
 			for (int r = 0; r < pointTypes.length; r++) {
 				RouteTypeRule typeRule = reg.quickGetEncodingRule(pointTypes[r]);
-				AlarmInfo info = AlarmInfo.createAlarmInfo(typeRule, locInd);
+				int x31 = res.getObject().getPoint31XTile(intId);
+				int y31 = res.getObject().getPoint31YTile(intId);
+				Location loc = new Location("");
+				loc.setLatitude(MapUtils.get31LatitudeY(y31));
+				loc.setLongitude(MapUtils.get31LongitudeX(x31));
+				AlarmInfo info = AlarmInfo.createAlarmInfo(typeRule, locInd, loc);
 				if(info != null) {
 					alarms.add(info);
 				}
@@ -174,8 +206,8 @@ public class RouteCalculationResult {
 	/**
 	 * PREPARATION 
 	 */
-	private List<RouteSegmentResult> convertVectorResult(List<RouteDirectionInfo> directions, List<Location> locations, List<RouteSegmentResult> list,
-			List<AlarmInfo> alarms, ClientContext ctx) {
+	private static List<RouteSegmentResult> convertVectorResult(List<RouteDirectionInfo> directions, List<Location> locations, List<RouteSegmentResult> list,
+			List<AlarmInfo> alarms, Context ctx) {
 		float prevDirectionTime = 0;
 		float prevDirectionDistance = 0;
 		List<RouteSegmentResult> segmentsToPopulate = new ArrayList<RouteSegmentResult>();
@@ -208,21 +240,31 @@ public class RouteCalculationResult {
 
 			if(turn != null) {
 				RouteDirectionInfo info = new RouteDirectionInfo(s.getSegmentSpeed(), turn);
-				if(routeInd + 1< list.size()) {
-					RouteSegmentResult next = list.get(routeInd);
-					info.setRef(next.getObject().getRef());
-					info.setStreetName(next.getObject().getName());
-					info.setDestinationName(next.getObject().getDestinationName());
-				}
-				
-				String description = toString(turn, ctx) + " " + RoutingHelper.formatStreetName(info.getStreetName(), 
+                if (routeInd  < list.size()) {
+                    int lind = routeInd;
+                    if(turn.isRoundAbout()) {
+                        int roundAboutEnd = prevLocationSize - 1;
+                    	// take next name for roundabout (not roundabout name)
+                    	while(lind < list.size() -1 && list.get(lind).getObject().roundabout()) {
+                    		roundAboutEnd += Math.abs(list.get(lind).getEndPointIndex()-list.get(lind).getStartPointIndex());
+                    		lind++;
+                    	}
+                    	// Consider roundabout end.
+                    	info.routeEndPointOffset = roundAboutEnd;
+                    }
+                    RouteSegmentResult next = list.get(lind);
+                    info.setRef(next.getObject().getRef());
+                    info.setStreetName(next.getObject().getName());
+                    info.setDestinationName(next.getObject().getDestinationName());
+                }
+
+                String description = toString(turn, ctx) + " " + RoutingHelper.formatStreetName(info.getStreetName(),
 						info.getRef(), info.getDestinationName());
 				info.setDescriptionRoute(description);
 				info.routePointOffset = prevLocationSize;
 				if(directions.size() > 0 && prevDirectionTime > 0 && prevDirectionDistance > 0) {
 					RouteDirectionInfo prev = directions.get(directions.size() - 1);
 					prev.setAverageSpeed(prevDirectionDistance / prevDirectionTime);
-					prev.setDescriptionRoute(prev.getDescriptionRoute() + " " + OsmAndFormatter.getFormattedDistance(prevDirectionDistance, ctx));
 					prevDirectionDistance = 0;
 					prevDirectionTime = 0;
 				}
@@ -234,28 +276,19 @@ public class RouteCalculationResult {
 		if(directions.size() > 0 && prevDirectionTime > 0 && prevDirectionDistance > 0) {
 			RouteDirectionInfo prev = directions.get(directions.size() - 1);
 			prev.setAverageSpeed(prevDirectionDistance / prevDirectionTime);
-			prev.setDescriptionRoute(prev.getDescriptionRoute() + " " + OsmAndFormatter.getFormattedDistance(prevDirectionDistance, ctx));
 		}
 		return segmentsToPopulate;
 	}
 	
-	protected void addMissingTurnsToRoute(List<Location> locations, 
-			List<RouteDirectionInfo> originalDirections, Location start, LatLon end, ApplicationMode mode, ClientContext ctx,
+	protected static void addMissingTurnsToRoute(List<Location> locations, 
+			List<RouteDirectionInfo> originalDirections, Location start, LatLon end, ApplicationMode mode, Context ctx,
 			boolean leftSide){
 		if(locations.isEmpty()){
 			return;
 		}
 		// speed m/s
-		float speed = 1.5f;
-		int minDistanceForTurn = 5;
-		if(mode == ApplicationMode.CAR){
-			speed = 15.3f;
-			minDistanceForTurn = 35;
-		} else if(mode == ApplicationMode.BICYCLE){
-			speed = 5.5f;
-			minDistanceForTurn = 12;
-		}
-
+		float speed = mode.getDefaultSpeed(); 
+		int minDistanceForTurn = mode.getMinDistanceForTurn();
 		List<RouteDirectionInfo> computeDirections = new ArrayList<RouteDirectionInfo>();
 		
 		int[] listDistance = new int[locations.size()];
@@ -267,7 +300,7 @@ public class RouteCalculationResult {
 		
 		int previousLocation = 0;
 		int prevBearingLocation = 0;
-		RouteDirectionInfo previousInfo = new RouteDirectionInfo(speed, TurnType.sraight());
+		RouteDirectionInfo previousInfo = new RouteDirectionInfo(speed, TurnType.straight());
 		previousInfo.routePointOffset = 0;
 		previousInfo.setDescriptionRoute(ctx.getString( R.string.route_head));
 		computeDirections.add(previousInfo);
@@ -344,8 +377,6 @@ public class RouteCalculationResult {
 				
 				// calculate for previousRoute 
 				previousInfo.distance = listDistance[previousLocation]- listDistance[i];
-				previousInfo.setDescriptionRoute(previousInfo.getDescriptionRoute()
-						+ " " + OsmAndFormatter.getFormattedDistance(previousInfo.distance, ctx)); //$NON-NLS-1$
 				type.setTurnAngle(360 - delta);
 				previousInfo = new RouteDirectionInfo(speed, type);
 				previousInfo.setDescriptionRoute(description);
@@ -359,9 +390,6 @@ public class RouteCalculationResult {
 		} 
 			
 		previousInfo.distance = listDistance[previousLocation];
-		previousInfo.setDescriptionRoute(previousInfo.getDescriptionRoute()
-				+ " " + OsmAndFormatter.getFormattedDistance(previousInfo.distance, ctx)); //$NON-NLS-1$
-		
 		if (originalDirections.isEmpty()) {
 			originalDirections.addAll(computeDirections);
 		} else {
@@ -416,30 +444,30 @@ public class RouteCalculationResult {
 	}
 	
 	
-	public String toString(TurnType type, ClientContext ctx) {
+	public static String toString(TurnType type, Context ctx) {
 		if(type.isRoundAbout()){
 			return ctx.getString(R.string.route_roundabout, type.getExitOut());
-		} else if(type.getValue().equals(TurnType.C)) {
+		} else if(type.getValue() == TurnType.C) {
 			return ctx.getString(R.string.route_head);
-		} else if(type.getValue().equals(TurnType.TSLL)) {
+		} else if(type.getValue() == TurnType.TSLL) {
 			return ctx.getString(R.string.route_tsll);
-		} else if(type.getValue().equals(TurnType.TL)) {
+		} else if(type.getValue() == TurnType.TL) {
 			return ctx.getString(R.string.route_tl);
-		} else if(type.getValue().equals(TurnType.TSHL)) {
+		} else if(type.getValue() == TurnType.TSHL) {
 			return ctx.getString(R.string.route_tshl);
-		} else if(type.getValue().equals(TurnType.TSLR)) {
+		} else if(type.getValue() == TurnType.TSLR) {
 			return ctx.getString(R.string.route_tslr);
-		} else if(type.getValue().equals(TurnType.TR)) {
+		} else if(type.getValue() == TurnType.TR) {
 			return ctx.getString(R.string.route_tr);
-		} else if(type.getValue().equals(TurnType.TSHR)) {
+		} else if(type.getValue() == TurnType.TSHR) {
 			return ctx.getString(R.string.route_tshr);
-		} else if(type.getValue().equals(TurnType.TU)) {
+		} else if(type.getValue() == TurnType.TU) {
 			return ctx.getString(R.string.route_tu);
-		} else if(type.getValue().equals(TurnType.TRU)) {
+		} else if(type.getValue() == TurnType.TRU) {
 			return ctx.getString(R.string.route_tu);
-		} else if(type.getValue().equals(TurnType.KL)) {
+		} else if(type.getValue() == TurnType.KL) {
 			return ctx.getString(R.string.route_kl);
-		} else if(type.getValue().equals(TurnType.KR)) {
+		} else if(type.getValue() == TurnType.KR) {
 			return ctx.getString(R.string.route_kr);
 		}
 		return "";
@@ -459,7 +487,7 @@ public class RouteCalculationResult {
 		if (directions != null && directions.size() > 1) {
 			for (int i = 1; i < directions.size();) {
 				RouteDirectionInfo r = directions.get(i);
-				if (r.getTurnType().getValue().equals(TurnType.C)) {
+				if (r.getTurnType().getValue() == TurnType.C) {
 					RouteDirectionInfo prev = directions.get(i - 1);
 					prev.setAverageSpeed((prev.distance + r.distance)
 							/ (prev.distance / prev.getAverageSpeed() + r.distance / r.getAverageSpeed()));
@@ -470,6 +498,7 @@ public class RouteCalculationResult {
 			}
 		}
 	}
+	
 
 	/**
 	 * PREPARATION
@@ -498,7 +527,7 @@ public class RouteCalculationResult {
 	 * If beginning is too far from start point, then introduce GO Ahead
 	 * @param end 
 	 */
-	private void introduceFirstPointAndLastPoint(List<Location> locations, List<RouteDirectionInfo> directions, List<RouteSegmentResult> segs, Location start, 
+	private static void introduceFirstPointAndLastPoint(List<Location> locations, List<RouteDirectionInfo> directions, List<RouteSegmentResult> segs, Location start, 
 			LatLon end) {
 		if (!locations.isEmpty() && locations.get(0).distanceTo(start) > 50) {
 			// add start point
@@ -511,7 +540,7 @@ public class RouteCalculationResult {
 					i.routePointOffset++;
 				}
 				RouteDirectionInfo info = new RouteDirectionInfo(directions.get(0).getAverageSpeed(),
-						TurnType.sraight());
+						TurnType.straight());
 				info.routePointOffset = 0;
 				// info.setDescriptionRoute(ctx.getString( R.string.route_head));//; //$NON-NLS-1$
 				directions.add(0, info);
@@ -519,7 +548,7 @@ public class RouteCalculationResult {
 		}
 		RouteDirectionInfo lastDirInf = directions.size() > 0 ? directions.get(directions.size() - 1) : null;
 		if((lastDirInf == null || lastDirInf.routePointOffset < locations.size() - 1) && locations.size() - 1 > 0) {
-			String type = TurnType.C;
+			int type = TurnType.C;
 			Location prevLast = locations.get(locations.size() - 2);
 			float lastBearing = prevLast.bearingTo(locations.get(locations.size() - 1));
 			float[] compute = new float[2];
@@ -542,7 +571,7 @@ public class RouteCalculationResult {
 	 * PREPARATION
 	 * At the end always update listDistance local vars and time
 	 */
-	private void updateListDistanceTime() {
+	private static void updateListDistanceTime(int[] listDistance, List<Location> locations) {
 		if (listDistance.length > 0) {
 			listDistance[locations.size() - 1] = 0;
 			for (int i = locations.size() - 1; i > 0; i--) {
@@ -556,7 +585,7 @@ public class RouteCalculationResult {
 	 * PREPARATION
 	 * At the end always update listDistance local vars and time
 	 */
-	private void updateDirectionsTime() {
+	private static void updateDirectionsTime(List<RouteDirectionInfo> directions, int[] listDistance) {
 		int sum = 0;
 		for (int i = directions.size() - 1; i >= 0; i--) {
 			directions.get(i).afterLeftTime = sum;
@@ -570,16 +599,16 @@ public class RouteCalculationResult {
 	
 	//////////////////// MUST BE ALL SYNCHRONIZED ??? //////////////////////
 	
-	public List<Location> getImmutableLocations() {
+	public List<Location> getImmutableAllLocations() {
 		return locations;
 	}
 	
-	public List<RouteDirectionInfo> getDirections() {
+	public List<RouteDirectionInfo> getImmutableAllDirections() {
 		return directions;
 	}
 	
 	
-	public List<Location> getNextLocations() {
+	public List<Location> getRouteLocations() {
 		if(currentRoute < locations.size()) {
 			return locations.subList(currentRoute, locations.size());
 		}
@@ -591,6 +620,45 @@ public class RouteCalculationResult {
 		if(cs < segments.size()) {
 			return segments.get(cs);
 		}
+		return null;
+	}
+	
+	public List<RouteSegmentResult> getUpcomingTunnel(float distToStart) {
+		int cs = currentRoute > 0 ? currentRoute - 1 : 0;
+		if(cs < segments.size()) {
+			RouteSegmentResult prev = null;
+			boolean tunnel = false;
+			while(cs < segments.size() && distToStart > 0) {
+				RouteSegmentResult segment = segments.get(cs);
+				if(segment != prev ) {
+					if(segment.getObject().tunnel()){
+						tunnel = true; 
+						break;
+					} else {
+						distToStart -= segment.getDistance();
+						prev = segment;
+					}
+				}
+				cs++;
+			}
+			if(tunnel) {
+				List<RouteSegmentResult> list = new ArrayList<RouteSegmentResult>();
+				while(cs < segments.size()) {
+					RouteSegmentResult segment = segments.get(cs);
+					if(segment != prev ) {
+						if(segment.getObject().tunnel()) {
+							list.add(segment);
+						} else {
+							break;
+						}
+						prev = segment;
+					}
+					cs++;
+				}
+				return list;
+			}
+		}
+		
 		return null;
 	}
 	
@@ -625,11 +693,10 @@ public class RouteCalculationResult {
 	
 	public void updateCurrentRoute(int currentRoute) {
 		this.currentRoute = currentRoute;
-		while (currentDirectionInfo < directions.size() - 1 && directions.get(currentDirectionInfo + 1).routePointOffset < currentRoute) {
+		while (currentDirectionInfo < directions.size() - 1
+				&& directions.get(currentDirectionInfo + 1).routePointOffset < currentRoute
+				&& directions.get(currentDirectionInfo + 1).routeEndPointOffset < currentRoute) {
 			currentDirectionInfo++;
-		}
-		while (nextAlarmInfo < alarmInfo.size() && alarmInfo.get(nextAlarmInfo).locationIndex < currentRoute) {
-			nextAlarmInfo++;
 		}
 		while(nextIntermediate < intermediatePoints.length) {
 			RouteDirectionInfo dir = directions.get(intermediatePoints[nextIntermediate]);
@@ -639,6 +706,10 @@ public class RouteCalculationResult {
 				break;
 			}
 		}
+	}
+	
+	public int getCurrentRoute() {
+		return currentRoute;
 	}
 	
 	public void passIntermediatePoint(){
@@ -656,7 +727,7 @@ public class RouteCalculationResult {
 	/*public */NextDirectionInfo getNextRouteDirectionInfo(NextDirectionInfo info, Location fromLoc, boolean toSpeak) {
 		int dirInfo = currentDirectionInfo;
 		if (dirInfo < directions.size()) {
-			int dist = listDistance[currentRoute];
+			// Locate next direction of interest
 			int nextInd = dirInfo + 1;
 			if (toSpeak) {
 				while (nextInd < directions.size()) {
@@ -667,12 +738,18 @@ public class RouteCalculationResult {
 					nextInd++;
 				}
 			}
+			int dist = listDistance[currentRoute];
 			if (fromLoc != null) {
 				dist += fromLoc.distanceTo(locations.get(currentRoute));
 			}
 			if (nextInd < directions.size()) {
 				info.directionInfo = directions.get(nextInd);
-				dist -= listDistance[directions.get(nextInd).routePointOffset];
+				if (directions.get(nextInd).routePointOffset <= currentRoute
+						&& currentRoute <= directions.get(nextInd).routeEndPointOffset)
+					// We are not into a puntual direction.
+					dist -= listDistance[directions.get(nextInd).routeEndPointOffset];
+				else
+					dist -= listDistance[directions.get(nextInd).routePointOffset];
 			}
 			if(intermediatePoints != null && nextIntermediate < intermediatePoints.length) {
 				info.intermediatePoint = intermediatePoints[nextIntermediate] == nextInd;
@@ -718,14 +795,35 @@ public class RouteCalculationResult {
 		return null;
 	}
 	
+	
+	
 	public List<RouteDirectionInfo> getRouteDirections() {
-		if(currentDirectionInfo < directions.size()){
-			if(currentDirectionInfo == 0){
-				return directions;
+		if(currentDirectionInfo < directions.size() - 1){
+			if(cacheCurrentTextDirectionInfo != currentDirectionInfo) {
+				cacheCurrentTextDirectionInfo = currentDirectionInfo;
+				List<RouteDirectionInfo> list = currentDirectionInfo == 0 ? directions : 
+					directions.subList(currentDirectionInfo + 1, directions.size());
+				cacheAgreggatedDirections = new ArrayList<RouteDirectionInfo>();
+				RouteDirectionInfo p = null;
+				for(RouteDirectionInfo i : list) {
+					if(p == null || !i.getTurnType().isSkipToSpeak() || 
+							(!Algorithms.objectEquals(p.getRef(), i.getRef()) && 
+									!Algorithms.objectEquals(p.getStreetName(), i.getStreetName()))) {
+						p = new RouteDirectionInfo(i.getAverageSpeed(), i.getTurnType());
+						p.routePointOffset = i.routePointOffset;
+						p.setDestinationName(i.getDestinationName());
+						p.setRef(i.getRef());
+						p.setStreetName(i.getStreetName());
+						p.setDescriptionRoute(i.getDescriptionRoutePart());
+						cacheAgreggatedDirections.add(p);
+					}
+					float time = i.getExpectedTime() + p.getExpectedTime();
+					p.distance += i.distance;
+					p.setAverageSpeed(p.distance / time);
+					p.afterLeftTime = i.afterLeftTime;
+				}
 			}
-			if(currentDirectionInfo < directions.size() - 1){
-				return directions.subList(currentDirectionInfo + 1, directions.size());
-			}
+			return cacheAgreggatedDirections;
 		}
 		return Collections.emptyList();
 	}
@@ -737,38 +835,6 @@ public class RouteCalculationResult {
 		return null;
 	}
 	
-	public AlarmInfo getMostImportantAlarm(Location fromLoc, AlarmInfo speedAlarm, boolean showCameras) {
-		int cRoute = currentRoute;
-		AlarmInfo mostImportant = speedAlarm;
-		int value = speedAlarm != null? speedAlarm.updateDistanceAndGetPriority(0, 0) : Integer.MAX_VALUE;
-		int aInfo = nextAlarmInfo;
-		if (aInfo < alarmInfo.size()) {
-			int dist = 0;
-			float speed = 0;
-			if (fromLoc != null && fromLoc.hasSpeed()) {
-				speed = fromLoc.getSpeed();
-			}
-			if (fromLoc != null) {
-				dist += fromLoc.distanceTo(locations.get(cRoute));
-			}
-			dist += listDistance[cRoute];
-			while(aInfo < alarmInfo.size()) {
-				AlarmInfo inf = alarmInfo.get(aInfo);
-				int d = dist - listDistance[inf.locationIndex];
-				if(d > 700){
-					break;
-				}
-				float time = speed > 0 ? d / speed : Integer.MAX_VALUE;
-				int vl = inf.updateDistanceAndGetPriority(time, d);
-				if(vl < value && (showCameras || inf.getType() != AlarmInfo.SPEED_CAMERA)){
-					mostImportant = inf;
-					value = vl;
-				}
-				aInfo++;
-			}
-		}
-		return mostImportant;
-	}
 	
 	public Location getNextRouteLocation(int after) {
 		if(currentRoute + after < locations.size()) {
@@ -779,6 +845,14 @@ public class RouteCalculationResult {
 	
 	public boolean directionsAvailable(){
 		return currentDirectionInfo < directions.size();
+	}
+	
+	public int getDistanceToPoint(int locationIndex) {
+		if(listDistance != null && currentRoute < listDistance.length && locationIndex < listDistance.length && 
+				locationIndex > currentRoute){
+			return listDistance[currentRoute] - listDistance[locationIndex];
+		}
+		return 0;
 	}
 	
 	public int getDistanceToFinish(Location fromLoc) {
@@ -808,6 +882,15 @@ public class RouteCalculationResult {
 			}
 		}
 		return 0;
+	}
+	
+	public int getIndexOfIntermediate(int countFromLast) {
+		final int j = intermediatePoints.length - countFromLast - 1;
+		if(j < intermediatePoints.length && j >= 0) {
+			int i = intermediatePoints[j];
+			return directions.get(i).routePointOffset;
+		}
+		return -1;
 	}
 	
 	public int getIntermediatePointsToPass(){
@@ -841,6 +924,7 @@ public class RouteCalculationResult {
 		public RouteDirectionInfo directionInfo;
 		public int distanceTo;
 		public boolean intermediatePoint;
+		public String pointName;
 		public int imminent;
 		private int directionInfoInd;
 	}

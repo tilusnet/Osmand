@@ -3,6 +3,7 @@ package net.osmand.render;
 
 import net.osmand.PlatformUtil;
 import net.osmand.binary.BinaryMapDataObject;
+import net.osmand.binary.BinaryMapIndexReader.TagValuePair;
 
 import org.apache.commons.logging.Log;
 
@@ -30,8 +31,9 @@ public class RenderingRuleProperty {
 	protected String name;
 	protected String description;
 	protected String[] possibleValues;
+	protected String category;
 	
-	private RenderingRuleProperty(String attrName, int type, boolean input){
+	protected RenderingRuleProperty(String attrName, int type, boolean input){
 		this.attrName = attrName;
 		this.type = type;
 		this.input = input;
@@ -64,6 +66,10 @@ public class RenderingRuleProperty {
 		return name;
 	}
 	
+	public String getCategory() {
+		return category;
+	}
+	
 	public String getDescription() {
 		return description;
 	}
@@ -74,6 +80,10 @@ public class RenderingRuleProperty {
 	
 	protected void setDescription(String description) {
 		this.description = description;
+	}
+	
+	public void setCategory(String category) {
+		this.category = category;
 	}
 	
 	protected void setPossibleValues(String[] possibleValues) {
@@ -134,11 +144,20 @@ public class RenderingRuleProperty {
 	public int parseIntValue(String value){
 		if(type == INT_TYPE){
 			try {
-				return Integer.parseInt(value);
+				int colon = value.indexOf(':');
+				if(colon != -1) {
+					int c  = 0;
+					if(colon > 0) {
+						c += (int) Float.parseFloat(value.substring(0, colon));
+					}
+					c += (int) Float.parseFloat(value.substring(colon + 1));
+					return c;
+				}
+				return (int) Float.parseFloat(value);
 			} catch (NumberFormatException e) {
-				log.error("Rendering parse " + value);
+				log.error("Rendering parse " + value + " in " + attrName);
 			}
-			return -1;
+ 			return -1;
 		} else if(type == BOOLEAN_TYPE){
 			return Boolean.parseBoolean(value) ? TRUE_VALUE : FALSE_VALUE;
 		} else if(type == STRING_TYPE){
@@ -148,7 +167,19 @@ public class RenderingRuleProperty {
 			try {
 				return parseColor(value);
 			} catch (RuntimeException e) {
-				log.error("Rendering parse " + e.getMessage());
+				log.error("Rendering parse " + e.getMessage() + " in " + attrName);
+			}
+			return -1;
+		} else if(type == FLOAT_TYPE){
+			// parse as complex value
+			try {
+				int colon = value.indexOf(':');
+				if(colon != -1) {
+					return (int) Float.parseFloat(value.substring(colon + 1));
+				}
+				return 0;
+			} catch (NumberFormatException e) {
+				log.error("Rendering parse " + value + " in " + attrName);
 			}
 			return -1;
 		} else {
@@ -159,9 +190,16 @@ public class RenderingRuleProperty {
 	public float parseFloatValue(String value){
 		if(type == FLOAT_TYPE){
 			try {
+				int colon = value.indexOf(':');
+				if(colon != -1) {
+					if(colon > 0) {
+						return Float.parseFloat(value.substring(0, colon));
+					} 
+					return 0;
+				}
 				return Float.parseFloat(value);
 			} catch (NumberFormatException e) {
-				log.error("Rendering parse " + value);
+				log.error("Rendering parse " + value + " in " + attrName);
 			}
 			return -1;
 		} else {
@@ -236,18 +274,35 @@ public class RenderingRuleProperty {
 			@Override
 			public boolean accept(int ruleValue, int renderingProperty, RenderingRuleSearchRequest req) {
 				BinaryMapDataObject obj = req.getObject();
-				if (obj == null) {
-					return true;
-				}
 				String val = req.getStorage().getStringValue(ruleValue);
-				int i = val.indexOf('=');
-				if (i != -1) {
-					String ts = val.substring(0, i);
-					String vs = val.substring(i + 1);
+				if (obj == null) {
+					int vl = req.getIntPropertyValue(this);
+					if(vl == -1) {
+						return false;
+					}
+					String val2 = req.getStorage().getStringValue(vl);
+					return val != null && val.equals(val2);
+				}
+				
+				int k = val.indexOf('=');
+				if (k != -1) {
+					String ts = val.substring(0, k);
+					String vs = val.substring(k + 1);
 					Integer ruleInd = req.getObject().getMapIndex().getRule(ts, vs);
 					if (ruleInd != null) {
 						if (req.getObject().containsAdditionalType(ruleInd)) {
 							return true;
+						}
+					}
+				} else {
+					String ts = val.substring(0, k);
+					if (ts != null) {
+						int[] additionalTypes = obj.getAdditionalTypes();
+						for (int i = 0; i < additionalTypes.length; i++) {
+							TagValuePair vp = obj.getMapIndex().decodeType(additionalTypes[i]);
+							if (vp != null && ts.equals(vp.tag)) {
+								return true;
+							}
 						}
 					}
 				}
@@ -280,12 +335,6 @@ public class RenderingRuleProperty {
         throw new IllegalArgumentException("Unknown color " + colorString); //$NON-NLS-1$
     }
     
-    public static String colorToString(int color) {
-		if ((0xFF000000 & color) == 0xFF000000) {
-			return "#" + Integer.toHexString(color & 0x00FFFFFF); //$NON-NLS-1$
-		} else {
-			return "#" + Integer.toHexString(color); //$NON-NLS-1$
-		}
-	}
+    
 
 }

@@ -4,19 +4,27 @@ import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URL;
 import java.net.URLConnection;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingDeque;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import net.osmand.PlatformUtil;
+import net.osmand.osm.io.NetworkUtils;
 import net.osmand.util.Algorithms;
 
 import org.apache.commons.logging.Log;
@@ -26,8 +34,9 @@ public class MapTileDownloader {
 	// Download manager tile settings
 	public static int TILE_DOWNLOAD_THREADS = 4;
 	public static int TILE_DOWNLOAD_SECONDS_TO_WORK = 25;
-	public static final long TIMEOUT_AFTER_EXCEEDING_LIMIT_ERRORS = 20000;
-	public static final int TILE_DOWNLOAD_MAX_ERRORS_PER_TIMEOUT = 25;
+	public static final long TIMEOUT_AFTER_EXCEEDING_LIMIT_ERRORS = 15000;
+	public static final int TILE_DOWNLOAD_MAX_ERRORS_PER_TIMEOUT = 50;
+	private static final int CONNECTION_TIMEOUT = 30000;
 	
 	
 	private static MapTileDownloader downloader = null;
@@ -39,6 +48,7 @@ public class MapTileDownloader {
 	private ThreadPoolExecutor threadPoolExecutor;
 	private List<IMapDownloaderCallback> callbacks = new ArrayList<IMapDownloaderCallback>();
 	
+	private Set<File> pendingToDownload;
 	private Set<File> currentlyDownloaded;
 	
 	private int currentErrors = 0;
@@ -100,16 +110,50 @@ public class MapTileDownloader {
 		public void setError(boolean error){
 			this.error = error;
 		}
+		
+		public void saveTile(InputStream inputStream) throws IOException {
+			fileToSave.getParentFile().mkdirs();
+			OutputStream stream = null;
+			try {
+				stream = new FileOutputStream(fileToSave);
+				Algorithms.streamCopy(inputStream, stream);
+				stream.flush();
+			} finally {
+				Algorithms.closeStream(inputStream);
+				Algorithms.closeStream(stream);
+			}
+		}
 	}
 	
 	
 	public MapTileDownloader(int numberOfThreads){
+		
 		threadPoolExecutor = new ThreadPoolExecutor(numberOfThreads, numberOfThreads, TILE_DOWNLOAD_SECONDS_TO_WORK, 
-				TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>());
+				TimeUnit.SECONDS, createQueue());
 		// 1.6 method but very useful to kill non-running threads
 //		threadPoolExecutor.allowCoreThreadTimeOut(true);
+		pendingToDownload = Collections.synchronizedSet(new HashSet<File>());
 		currentlyDownloaded = Collections.synchronizedSet(new HashSet<File>());
 		
+	}
+
+	protected BlockingQueue<Runnable> createQueue() {
+		boolean loaded = false;
+		try {
+			Class<?> cl = Class.forName("java.util.concurrent.LinkedBlockingDeque");
+			loaded = cl != null;
+		} catch (Throwable e) {
+			e.printStackTrace();
+		}
+		if(!loaded) {
+			// for Android 2.2
+			return new LinkedBlockingQueue<Runnable>();
+		}
+		return createDeque();
+	}
+
+	protected static BlockingQueue<Runnable> createDeque() {
+		return new net.osmand.util.LIFOBlockingDeque<Runnable>();
 	}
 	
 	public void addDownloaderCallback(IMapDownloaderCallback callback){
@@ -122,6 +166,10 @@ public class MapTileDownloader {
 	
 	public List<IMapDownloaderCallback> getDownloaderCallbacks() {
 		return callbacks;
+	}
+	
+	public boolean isFilePendingToDownload(File f){
+		return pendingToDownload.contains(f);
 	}
 	
 	public boolean isFileCurrentlyDownloaded(File f){
@@ -142,6 +190,7 @@ public class MapTileDownloader {
 		while(!threadPoolExecutor.getQueue().isEmpty()){
 			threadPoolExecutor.getQueue().poll();
 		}
+		pendingToDownload.clear();
 	}
 	
 	public void requestToDownload(DownloadRequest request){
@@ -156,7 +205,9 @@ public class MapTileDownloader {
 			return;
 		}
 		
-		if (!isFileCurrentlyDownloaded(request.fileToSave)) {
+		if (!isFileCurrentlyDownloaded(request.fileToSave)
+				&& !isFilePendingToDownload(request.fileToSave)) {
+			pendingToDownload.add(request.fileToSave);
 			threadPoolExecutor.execute(new DownloadMapWorker(request));
 		}
 	}
@@ -173,6 +224,7 @@ public class MapTileDownloader {
 		@Override
 		public void run() {
 			if (request != null && request.fileToSave != null && request.url != null) {
+				pendingToDownload.remove(request.fileToSave);
 				if(currentlyDownloaded.contains(request.fileToSave)){
 					return;
 				}
@@ -182,31 +234,25 @@ public class MapTileDownloader {
 					log.debug("Start downloading tile : " + request.url); //$NON-NLS-1$
 				}
 				long time = System.currentTimeMillis();
+				request.setError(false);
 				try {
-					request.fileToSave.getParentFile().mkdirs();
-					URL url = new URL(request.url);
-					URLConnection connection = url.openConnection();
+					URLConnection connection = NetworkUtils.getHttpURLConnection(request.url);
 					connection.setRequestProperty("User-Agent", USER_AGENT); //$NON-NLS-1$
-					connection.setConnectTimeout(35000);
+					connection.setConnectTimeout(CONNECTION_TIMEOUT);
+					connection.setReadTimeout(CONNECTION_TIMEOUT);
 					BufferedInputStream inputStream = new BufferedInputStream(connection.getInputStream(), 8 * 1024);
-					FileOutputStream stream = null;
-					try {
-						stream = new FileOutputStream(request.fileToSave);
-						Algorithms.streamCopy(inputStream, stream);
-						stream.flush();
-					} finally {
-						Algorithms.closeStream(inputStream);
-						Algorithms.closeStream(stream);
-					}
+					request.saveTile(inputStream);
 					if (log.isDebugEnabled()) {
 						log.debug("Downloading tile : " + request.url + " successfull " + (System.currentTimeMillis() - time) + " ms"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 					}
 				} catch (UnknownHostException e) {
 					currentErrors++;
+					timeForErrorCounter = System.currentTimeMillis();
 					request.setError(true);
 					log.error("UnknownHostException, cannot download tile " + request.url + " " + e.getMessage()); //$NON-NLS-1$  //$NON-NLS-2$
 				} catch (IOException e) {
 					currentErrors++;
+					timeForErrorCounter = System.currentTimeMillis();
 					request.setError(true);
 					log.warn("Cannot download tile : " + request.url, e); //$NON-NLS-1$
 				} finally {

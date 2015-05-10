@@ -4,7 +4,8 @@ import gnu.trove.list.array.TIntArrayList;
 import gnu.trove.map.hash.TIntObjectHashMap;
 
 import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,12 +15,15 @@ import net.osmand.NativeLibrary.NativeSearchResult;
 import net.osmand.PlatformUtil;
 import net.osmand.binary.BinaryMapDataObject;
 import net.osmand.binary.BinaryMapIndexReader.TagValuePair;
+import net.osmand.data.QuadRect;
+import net.osmand.data.QuadTree;
 import net.osmand.map.MapTileDownloader.IMapDownloaderCallback;
 import net.osmand.plus.render.TextRenderer.TextDrawInfo;
 import net.osmand.render.RenderingRuleProperty;
 import net.osmand.render.RenderingRuleSearchRequest;
 import net.osmand.render.RenderingRulesStorage;
 import net.osmand.util.Algorithms;
+import net.osmand.util.MapUtils;
 
 import org.apache.commons.logging.Log;
 
@@ -27,6 +31,7 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapShader;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.ColorFilter;
 import android.graphics.DashPathEffect;
 import android.graphics.Paint;
@@ -38,6 +43,7 @@ import android.graphics.PathEffect;
 import android.graphics.PointF;
 import android.graphics.PorterDuff.Mode;
 import android.graphics.PorterDuffColorFilter;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Shader.TileMode;
@@ -55,8 +61,10 @@ public class OsmandRenderer {
 	private Paint paintIcon;
 
 	public static final int TILE_SIZE = 256; 
+	private static final int MAX_V = 75;
 
-	private Map<String, PathEffect> dashEffect = new LinkedHashMap<String, PathEffect>();
+	private Map<float[], PathEffect> dashEffect = new LinkedHashMap<float[], PathEffect>();
+	private Map<String, float[]> parsedDashEffects = new LinkedHashMap<String, float[]>();
 	private Map<String, Shader> shaders = new LinkedHashMap<String, Shader>();
 
 	private final Context context;
@@ -65,19 +73,36 @@ public class OsmandRenderer {
 
 	private TextRenderer textRenderer;
 
+	public class MapDataObjectPrimitive {
+		BinaryMapDataObject obj;
+		int typeInd;
+		double order;
+		int objectType;
+	};
 
 	private static class IconDrawInfo {
 		float x = 0;
 		float y = 0;
+		String resId_1;
 		String resId;
+		String resId2;
+		String resId3;
+		String resId4;
+		String resId5;
+		String shieldId;
+		int iconOrder;
+		float iconSize;
 	}
 	
 	
 	
 
-	/* package */static class RenderingContext extends net.osmand.RenderingContext {
+	/* package */
+	public static class RenderingContext extends net.osmand.RenderingContext {
 		List<TextDrawInfo> textToDraw = new ArrayList<TextDrawInfo>();
 		List<IconDrawInfo> iconsToDraw = new ArrayList<IconDrawInfo>();
+		Paint[] oneWay ;
+		Paint[] reverseOneWay ;
 		final Context ctx;
 
 		public RenderingContext(Context ctx) {
@@ -93,6 +118,7 @@ public class OsmandRenderer {
 		int shadowLevelMax = 0;
 
 		boolean ended = false;
+
 		
 		@Override
 		protected byte[] getIconRawData(String data) {
@@ -116,14 +142,13 @@ public class OsmandRenderer {
 		wmgr.getDefaultDisplay().getMetrics(dm);
 	}
 
-	public PathEffect getDashEffect(String dashes){
+	public PathEffect getDashEffect(RenderingContext rc, float[] cachedValues, float st){
+		float[] dashes = new float[cachedValues.length / 2];
+		for (int i = 0; i < dashes.length; i++) {
+			dashes[i] = rc.getDensityValue(cachedValues[i * 2]) + cachedValues[i * 2 + 1];
+		}
 		if(!dashEffect.containsKey(dashes)){
-			String[] ds = dashes.split("_"); //$NON-NLS-1$
-			float[] f = new float[ds.length];
-			for(int i=0; i<ds.length; i++){
-				f[i] = Float.parseFloat(ds[i]);
-			}
-			dashEffect.put(dashes, new DashPathEffect(f, 0));
+			dashEffect.put(dashes, new DashPathEffect(dashes, st));
 		}
 		return dashEffect.get(dashes);
 	}
@@ -188,6 +213,32 @@ public class OsmandRenderer {
 		}
 	}
 	
+	void drawObject(RenderingContext rc,  Canvas cv, RenderingRuleSearchRequest req,
+			List<MapDataObjectPrimitive> array, int objOrder) {
+			//double polygonLimit = 100;
+			//float orderToSwitch = 0;
+			double minPolygonSize = 1. / rc.polygonMinSizeToDisplay;
+			for (int i = 0; i < array.size(); i++) {
+				rc.allObjects++;
+				BinaryMapDataObject mObj = array.get(i).obj;
+				TagValuePair pair = mObj.getMapIndex().decodeType(mObj.getTypes()[array.get(i).typeInd]);
+				if (objOrder == 0) {
+					if (array.get(i).order > minPolygonSize + ((int) array.get(i).order)) {
+						continue;
+					}
+					// polygon
+					drawPolygon(mObj, req, cv, rc, pair);
+				} else if (objOrder == 1 || objOrder == 2) {
+					drawPolyline(mObj, req, cv, rc, pair, mObj.getSimpleLayer(), objOrder == 1);
+				} else if (objOrder == 3) {
+					drawPoint(mObj, req, cv, rc, pair, array.get(i).typeInd == 0);
+				}
+				if (i % 25 == 0 && rc.interrupted) {
+					return;
+				}
+			}
+		}
+	
 	public void generateNewBitmap(RenderingContext rc, List<BinaryMapDataObject> objects, Bitmap bmp, 
 				RenderingRuleSearchRequest render, final List<IMapDownloaderCallback> notifyList) {
 		long now = System.currentTimeMillis();
@@ -201,64 +252,32 @@ public class OsmandRenderer {
 			rc.sinRotateTileSize = FloatMath.sin((float) Math.toRadians(rc.rotate)) * TILE_SIZE;
 			
 			// put in order map
-			TIntObjectHashMap<TIntArrayList> orderMap = sortObjectsByProperOrder(rc, objects, render);
+			List<MapDataObjectPrimitive>  pointsArray = new ArrayList<OsmandRenderer.MapDataObjectPrimitive>();
+			List<MapDataObjectPrimitive> polygonsArray = new ArrayList<OsmandRenderer.MapDataObjectPrimitive>();
+			List<MapDataObjectPrimitive>  linesArray = new ArrayList<OsmandRenderer.MapDataObjectPrimitive>();
+			sortObjectsByProperOrder(rc, objects, render, pointsArray, polygonsArray, linesArray);
 
-			int objCount = 0;
+			rc.lastRenderedKey = 0;
 
-			int[] keys = orderMap.keys();
-			Arrays.sort(keys);
-
-			boolean shadowDrawn = false;
-
-			for (int k = 0; k < keys.length; k++) {
-				if (!shadowDrawn && (keys[k]>>2) >= rc.shadowLevelMin && (keys[k]>>2) <= rc.shadowLevelMax && rc.shadowRenderingMode > 1) {
-					for (int ki = k; ki < keys.length; ki++) {
-						if ((keys[ki]>>2) > rc.shadowLevelMax || rc.interrupted) {
-							break;
-						}
-						TIntArrayList list = orderMap.get(keys[ki]);
-						for (int j = 0; j < list.size(); j++) {
-							int i = list.get(j);
-							int ind = i >> 8;
-							int l = i & 0xff;
-							BinaryMapDataObject obj = objects.get(ind);
-
-							// show text only for main type
-							drawObj(obj, render, cv, rc, l, l == 0, true, (keys[ki] & 3));
-							objCount++;
-						}
-					}
-					shadowDrawn = true;
-				}
-				if (rc.interrupted) {
-					return;
-				}
-
-				TIntArrayList list = orderMap.get(keys[k]);
-				for (int j = 0; j < list.size(); j++) {
-					int i = list.get(j);
-					int ind = i >> 8;
-					int l = i & 0xff;
-					BinaryMapDataObject obj = objects.get(ind);
-
-					// show text only for main type
-					drawObj(obj, render, cv, rc, l, l == 0, false, (keys[k] & 3));
-					objCount++;
-				}
-				rc.lastRenderedKey = (keys[k] >> 2);
-				if (objCount > 25) {
-					notifyListeners(notifyList);
-					objCount = 0;
-				}
-
+			drawObject(rc, cv, render, polygonsArray, 0);
+			rc.lastRenderedKey = 5;
+			if (rc.shadowRenderingMode > 1) {
+				drawObject(rc, cv, render, linesArray, 1);
 			}
+			rc.lastRenderedKey = 40;
+			drawObject(rc, cv, render, linesArray, 2);
+			rc.lastRenderedKey = 60;
+
+			drawObject(rc, cv, render, pointsArray, 3);
+			rc.lastRenderedKey = 125;
+
 
 			long beforeIconTextTime = System.currentTimeMillis() - now;
 			notifyListeners(notifyList);
 			drawIconsOverCanvas(rc, cv);
 
 			notifyListeners(notifyList);
-			textRenderer.drawTextOverCanvas(rc, cv, rc.useEnglishNames);
+			textRenderer.drawTextOverCanvas(rc, cv, rc.preferredLocale);
 
 			long time = System.currentTimeMillis() - now;
 			rc.renderingDebugInfo = String.format("Rendering: %s ms  (%s text)\n"
@@ -286,32 +305,71 @@ public class OsmandRenderer {
 	}
 
 	private void drawIconsOverCanvas(RenderingContext rc, Canvas cv) {
-		int skewConstant = (int) rc.getDensityValue(16);
-		int iconsW = rc.width / skewConstant;
-		int iconsH = rc.height / skewConstant;
-		int[] alreadyDrawnIcons = new int[iconsW * iconsH / 32];
+		// 1. Sort text using text order
+		Collections.sort(rc.iconsToDraw, new Comparator<IconDrawInfo>() {
+			@Override
+			public int compare(IconDrawInfo object1, IconDrawInfo object2) {
+				return object1.iconOrder - object2.iconOrder;
+			}
+		});
+		QuadRect bounds = new QuadRect(0, 0, rc.width, rc.height);
+		bounds.inset(-bounds.width()/4, -bounds.height()/4);
+		QuadTree<RectF> boundIntersections = new QuadTree<RectF>(bounds, 4, 0.6f);
+		List<RectF> result = new ArrayList<RectF>();
+		
 		for (IconDrawInfo icon : rc.iconsToDraw) {
 			if (icon.resId != null) {
 				Bitmap ico = RenderingIcons.getIcon(context, icon.resId);
 				if (ico != null) {
 					if (icon.y >= 0 && icon.y < rc.height && icon.x >= 0 && icon.x < rc.width) {
-						int z = (((int) icon.x / skewConstant) + ((int) icon.y / skewConstant) * iconsW);
-						int i = z / 32;
-						if (i >= alreadyDrawnIcons.length) {
-							continue;
+						int visbleWidth = icon.iconSize >= 0 ? (int) icon.iconSize : ico.getWidth();
+						int visbleHeight = icon.iconSize >= 0 ? (int) icon.iconSize : ico.getHeight();
+						boolean intersects = false;
+						float coeff = rc.getDensityValue(rc.screenDensityRatio * rc.textScale);
+						RectF rf = calculateRect(rc, icon, ico.getWidth(), ico.getHeight());
+						RectF visibleRect = null;
+						if (visbleHeight > 0 && visbleWidth > 0) {
+							visibleRect = calculateRect(rc, icon, visbleWidth, visbleHeight);
+							boundIntersections.queryInBox(new QuadRect(visibleRect.left, visibleRect.top, visibleRect.right, visibleRect.bottom), result);
+							for (RectF r : result) {
+								if (r.intersect(visibleRect)) {
+									intersects = true;
+									break;
+								}
+							}
 						}
-						int ind = alreadyDrawnIcons[i];
-						int b = z % 32;
-						// check bit b if it is set
-						if (((ind >> b) & 1) == 0) {
-							alreadyDrawnIcons[i] = ind | (1 << b);
-							if(rc.getDensityValue(1) != 1) {
-								float left = icon.x - rc.getDensityValue(ico.getWidth() / 2);
-								float top = icon.y - rc.getDensityValue(ico.getHeight() / 2);
-								cv.drawBitmap(ico, null, new RectF(left, top, left + rc.getDensityValue(ico.getWidth()), top
-										+ rc.getDensityValue(ico.getHeight())), paintIcon);
+						
+						if (!intersects) {
+							Bitmap shield = icon.shieldId == null ? null : RenderingIcons.getIcon(context, icon.shieldId);
+							if(shield != null) {
+								RectF shieldRf = calculateRect(rc, icon, shield.getWidth(), shield.getHeight());
+								if (coeff != 1f) {
+									Rect src = new Rect(0, 0, shield.getWidth(), shield.getHeight());
+									drawBitmap(cv, shield, shieldRf, src);
+								} else {
+									drawBitmap(cv, shield, shieldRf);
+								}	
+							}
+							if (coeff != 1f) {
+								Rect src = new Rect(0, 0, ico.getWidth(), ico.getHeight());
+								drawBitmap(cv, RenderingIcons.getIcon(context, icon.resId_1), rf, src);
+								drawBitmap(cv, ico, rf, src);
+								drawBitmap(cv, RenderingIcons.getIcon(context, icon.resId2), rf, src);
+								drawBitmap(cv, RenderingIcons.getIcon(context, icon.resId3), rf, src);
+								drawBitmap(cv, RenderingIcons.getIcon(context, icon.resId4), rf, src);
+								drawBitmap(cv, RenderingIcons.getIcon(context, icon.resId5), rf, src);
 							} else {
-								cv.drawBitmap(ico, icon.x - ico.getWidth() / 2, icon.y - ico.getHeight() / 2, paintIcon);
+								drawBitmap(cv, RenderingIcons.getIcon(context, icon.resId_1), rf);
+								drawBitmap(cv, ico, rf);
+								drawBitmap(cv, RenderingIcons.getIcon(context, icon.resId2), rf);
+								drawBitmap(cv, RenderingIcons.getIcon(context, icon.resId3), rf);
+								drawBitmap(cv, RenderingIcons.getIcon(context, icon.resId4), rf);
+								drawBitmap(cv, RenderingIcons.getIcon(context, icon.resId5), rf);
+							}
+							if(visibleRect != null) {
+								visibleRect.inset(-visibleRect.width() / 4, -visibleRect.height() / 4);
+								boundIntersections.insert(visibleRect, 
+										new QuadRect(visibleRect.left, visibleRect.top, visibleRect.right, visibleRect.bottom));
 							}
 						}
 					}
@@ -323,21 +381,77 @@ public class OsmandRenderer {
 		}
 	}
 
-	private TIntObjectHashMap<TIntArrayList> sortObjectsByProperOrder(RenderingContext rc, List<BinaryMapDataObject> objects,
-			RenderingRuleSearchRequest render) {
+	protected void drawBitmap(Canvas cv, Bitmap ico, RectF rf) {
+		if(ico == null) {
+			return;
+		}
+		cv.drawBitmap(ico, rf.left, rf.top, paintIcon);
+	}
+
+	protected void drawBitmap(Canvas cv, Bitmap ico, RectF rf, Rect src) {
+		if(ico == null) {
+			return;
+		}
+		cv.drawBitmap(ico, src, rf, paintIcon);
+	}
+
+	private RectF calculateRect(RenderingContext rc, IconDrawInfo icon, int visbleWidth, int visbleHeight) {
+		RectF rf;
+		float coeff = rc.getDensityValue(rc.screenDensityRatio * rc.textScale);
+		float left = icon.x - visbleWidth / 2 * coeff;
+		float top = icon.y - visbleHeight / 2 * coeff;
+		float right = left + visbleWidth * coeff;
+		float bottom = top + visbleHeight * coeff;
+		rf = new RectF(left, top, right, bottom);
+		return rf;
+	}
+	
+	Comparator<MapDataObjectPrimitive> sortByOrder() {
+		return new Comparator<MapDataObjectPrimitive>() {
+
+			@Override
+			public int compare(MapDataObjectPrimitive i, MapDataObjectPrimitive j) {
+				if (i.order == j.order) {
+					if (i.typeInd == j.typeInd) {
+						if(i.obj.getPointsLength() == j.obj.getPointsLength()) {
+							return 0;
+						}
+						return i.obj.getPointsLength() < j.obj.getPointsLength() ? -1 : 1;
+					}
+					return i.typeInd < j.typeInd ? -1 : 1;
+				}
+				return (i.order < j.order ? -1 : 1);
+			}
+
+		};
+	}
+	
+	Comparator<MapDataObjectPrimitive> sortPolygonsOrder() {
+		return new Comparator<MapDataObjectPrimitive>() {
+
+			@Override
+			public int compare(MapDataObjectPrimitive i, MapDataObjectPrimitive j) {
+				if (i.order == j.order)
+					return i.typeInd < j.typeInd ? -1 : 1;
+				return (i.order > j.order) ? -1 : 1;
+			}
+		};
+	}
+
+	private void sortObjectsByProperOrder(RenderingContext rc, List<BinaryMapDataObject> objects,
+			RenderingRuleSearchRequest render, 
+			List<MapDataObjectPrimitive>  pointsArray, List<MapDataObjectPrimitive> polygonsArray,
+			List<MapDataObjectPrimitive>  linesResArray) {
 		int sz = objects.size();
-		TIntObjectHashMap<TIntArrayList> orderMap = new TIntObjectHashMap<TIntArrayList>();
+		List<MapDataObjectPrimitive> linesArray = new ArrayList<OsmandRenderer.MapDataObjectPrimitive>();
 		if (render != null) {
 			render.clearState();
 
+			float mult = (float) (1. / MapUtils.getPowZoom(Math.max(31 - (rc.zoom + 8), 0)));
 			for (int i = 0; i < sz; i++) {
 				BinaryMapDataObject o = objects.get(i);
-				int sh = i << 8;
-
 				for (int j = 0; j < o.getTypes().length; j++) {
-					// put(orderMap, BinaryMapDataObject.getOrder(o.getTypes()[j]), sh + j, init);
 					int wholeType = o.getTypes()[j];
-
 					int layer = 0;
 					if (o.getPointsLength() > 1) {
 						layer = o.getSimpleLayer();
@@ -352,10 +466,24 @@ public class OsmandRenderer {
 						if (render.search(RenderingRulesStorage.ORDER_RULES)) {
 							int objectType = render.getIntPropertyValue(render.ALL.R_OBJECT_TYPE);
 							int order = render.getIntPropertyValue(render.ALL.R_ORDER);
-							put(orderMap, (order << 2) | objectType, sh + j);
+							MapDataObjectPrimitive mapObj = new MapDataObjectPrimitive();
+							mapObj.objectType = objectType;
+							mapObj.order = order;
+							mapObj.typeInd = j;
+							mapObj.obj = o;
 							if(objectType == 3) {
-								// add icon point all the time
-								put(orderMap,(128 << 2)|1, sh + j);
+								MapDataObjectPrimitive pointObj = mapObj;
+								pointObj.objectType = 1;
+								double area = polygonArea(mapObj, mult);
+								if(area > MAX_V) { 
+									mapObj.order = mapObj.order + (1. / area);
+									polygonsArray.add(mapObj);
+									pointsArray.add(pointObj); // TODO fix duplicate text? verify if it is needed for icon
+								}
+							} else if(objectType == 1) {
+								pointsArray.add(mapObj);
+							} else {
+								linesArray.add(mapObj);
 							}
 							if (render.isSpecified(render.ALL.R_SHADOW_LEVEL)) {
 								rc.shadowLevelMin = Math.min(rc.shadowLevelMin, order);
@@ -368,12 +496,74 @@ public class OsmandRenderer {
 				}
 
 				if (rc.interrupted) {
-					return orderMap;
+					return;
 				}
 			}
 		}
-		return orderMap;
+		Collections.sort(polygonsArray, sortByOrder());
+		Collections.sort(pointsArray, sortByOrder());
+		Collections.sort(linesArray, sortByOrder());
+		filterLinesByDensity(rc, linesResArray, linesArray);
 	}
+	
+	void filterLinesByDensity(RenderingContext rc, List<MapDataObjectPrimitive>  linesResArray,
+			List<MapDataObjectPrimitive> linesArray) {
+//		int roadsLimit = rc->roadsDensityLimitPerTile;
+//		int densityZ = rc->roadDensityZoomTile;
+//		if(densityZ == 0 || roadsLimit == 0) {
+//			linesResArray = linesArray;
+//			return;
+//		}
+//		linesResArray.reserve(linesArray.size());
+//		UNORDERED(map)<int64_t, pair<int, int> > densityMap;
+//		for (int i = linesArray.size() - 1; i >= 0; i--) {
+//			bool accept = true;
+//			int o = linesArray[i].order;
+//			MapDataObject* line = linesArray[i].obj;
+//			tag_value& ts = line->types[linesArray[i].typeInd];
+//			if (ts.first == "highway") {
+//				accept = false;
+//				int64_t prev = 0;
+//				for (uint k = 0; k < line->points.size(); k++) {
+//					int dz = rc->getZoom() + densityZ;
+//					int64_t x = (line->points[k].first) >> (31 - dz);
+//					int64_t y = (line->points[k].second) >> (31 - dz);
+//					int64_t tl = (x << dz) + y;
+//					if (prev != tl) {
+//						prev = tl;
+//						pair<int, int>& p = densityMap[tl];
+//						if (p.first < roadsLimit/* && p.second > o */) {
+//							accept = true;
+//							p.first++;
+//							p.second = o;
+//							densityMap[tl] = p;
+//						}
+//					}
+//				}
+//			}
+//			if(accept) {
+//				linesResArray.push_back(linesArray[i]);
+//			}
+//		}
+//		reverse(linesResArray.begin(), linesResArray.end());
+		// TODO
+		linesResArray.addAll(linesArray);
+	}
+
+	private double polygonArea(MapDataObjectPrimitive mapObj, float mult) {
+		double area = 0.;
+		int j = mapObj.obj.getPointsLength() - 1;
+		for (int i = 0; i < mapObj.obj.getPointsLength(); i++) {
+			int px = mapObj.obj.getPoint31XTile(i);
+			int py = mapObj.obj.getPoint31YTile(i);
+			int sx = mapObj.obj.getPoint31XTile(j);
+			int sy = mapObj.obj.getPoint31YTile(j);
+			area += (sx + ((float) px)) * (sy - ((float) py));
+			j = i;
+		}
+		return Math.abs(area) * mult * mult * .5;
+	}
+
 	private void notifyListeners(List<IMapDownloaderCallback> notifyList) {
 		if (notifyList != null) {
 			for (IMapDownloaderCallback c : notifyList) {
@@ -382,28 +572,14 @@ public class OsmandRenderer {
 		}
 	}
 
-	protected void drawObj(BinaryMapDataObject obj, RenderingRuleSearchRequest render, Canvas canvas, RenderingContext rc, int l,
-			boolean renderText, boolean drawOnlyShadow, int type) {
-		rc.allObjects++;
-		TagValuePair pair = obj.getMapIndex().decodeType(obj.getTypes()[l]);
-		if (type == RenderingRulesStorage.POINT_RULES && !drawOnlyShadow) {
-			drawPoint(obj, render, canvas, rc, pair, renderText);
-		} else if (type == RenderingRulesStorage.LINE_RULES) {
-			drawPolyline(obj, render, canvas, rc, pair, obj.getSimpleLayer(), drawOnlyShadow);
-		} else if (type == RenderingRulesStorage.POLYGON_RULES && !drawOnlyShadow) {
-			drawPolygon(obj, render, canvas, rc, pair);
-		}
-	}
-
-
 	private PointF calcPoint(int xt, int yt, RenderingContext rc){
 		rc.pointCount ++;
-		float tx = xt / rc.tileDivisor;
-		float ty = yt / rc.tileDivisor;
-		float dTileX = tx - rc.leftX;
-		float dTileY = ty - rc.topY;
-		float x = rc.cosRotateTileSize * dTileX - rc.sinRotateTileSize * dTileY;
-		float y = rc.sinRotateTileSize * dTileX + rc.cosRotateTileSize * dTileY;
+		double tx = xt / rc.tileDivisor;
+		double ty = yt / rc.tileDivisor;
+		double dTileX = (tx - rc.leftX);
+		double dTileY = (ty - rc.topY);
+		float x = (float) (rc.cosRotateTileSize * dTileX - rc.sinRotateTileSize * dTileY);
+		float y = (float) (rc.sinRotateTileSize * dTileX + rc.cosRotateTileSize * dTileY);
 		rc.tempPoint.set(x, y);
 		if(rc.tempPoint.x >= 0 && rc.tempPoint.x < rc.width && 
 				rc.tempPoint.y >= 0 && rc.tempPoint.y < rc.height){
@@ -482,7 +658,7 @@ public class OsmandRenderer {
 		}
 	}
 	
-	private boolean updatePaint(RenderingRuleSearchRequest req, Paint p, int ind, boolean area, RenderingContext rc){
+	public boolean updatePaint(RenderingRuleSearchRequest req, Paint p, int ind, boolean area, RenderingContext rc){
 		RenderingRuleProperty rColor;
 		RenderingRuleProperty rStrokeW;
 		RenderingRuleProperty rCap;
@@ -508,11 +684,26 @@ public class OsmandRenderer {
 			rStrokeW = req.ALL.R_STROKE_WIDTH__1;
 			rCap = req.ALL.R_CAP__1;
 			rPathEff = req.ALL.R_PATH_EFFECT__1;
-		} else {
+		} else if(ind == 2){
 			rColor = req.ALL.R_COLOR_3;
 			rStrokeW = req.ALL.R_STROKE_WIDTH_3;
 			rCap = req.ALL.R_CAP_3;
 			rPathEff = req.ALL.R_PATH_EFFECT_3;
+		} else if(ind == -3){
+			rColor = req.ALL.R_COLOR__2;
+			rStrokeW = req.ALL.R_STROKE_WIDTH__2;
+			rCap = req.ALL.R_CAP__2;
+			rPathEff = req.ALL.R_PATH_EFFECT__2;
+		} else if(ind == 3){
+			rColor = req.ALL.R_COLOR_4;
+			rStrokeW = req.ALL.R_STROKE_WIDTH_4;
+			rCap = req.ALL.R_CAP_4;
+			rPathEff = req.ALL.R_PATH_EFFECT_4;
+		} else {
+			rColor = req.ALL.R_COLOR_5;
+			rStrokeW = req.ALL.R_STROKE_WIDTH_5;
+			rCap = req.ALL.R_CAP_5;
+			rPathEff = req.ALL.R_PATH_EFFECT_5;
 		}
 		if(area){
 			if(!req.isSpecified(rColor) && !req.isSpecified(req.ALL.R_SHADER)){
@@ -531,7 +722,7 @@ public class OsmandRenderer {
 			p.setColorFilter(null);
 			p.clearShadowLayer();
 			p.setStyle(Style.STROKE);
-			p.setStrokeWidth(req.getFloatPropertyValue(rStrokeW));
+			p.setStrokeWidth(rc.getComplexValue(req, rStrokeW));
 			String cap = req.getStringPropertyValue(rCap);
 			if(!Algorithms.isEmpty(cap)){
 				p.setStrokeCap(Cap.valueOf(cap.toUpperCase()));
@@ -540,7 +731,29 @@ public class OsmandRenderer {
 			}
 			String pathEffect = req.getStringPropertyValue(rPathEff);
 			if (!Algorithms.isEmpty(pathEffect)) {
-				p.setPathEffect(getDashEffect(pathEffect));
+				if(!parsedDashEffects.containsKey(pathEffect)) {
+					String[] vls = pathEffect.split("_");
+					float[] vs = new float[vls.length * 2];
+					for(int i = 0; i < vls.length; i++) {
+						int s = vls[i].indexOf(':');
+						String pre = vls[i];
+						String post = "";
+						if(s != -1) {
+							pre = vls[i].substring(0, i);
+							post = vls[i].substring(i + 1);
+						}
+						if(pre.length() > 0) {
+							vs[i*2 ] = Float.parseFloat(pre);
+						}
+						if(post.length() > 0) {
+							vs[i*2 +1] = Float.parseFloat(post);
+						}
+					}
+					parsedDashEffects.put(pathEffect, vs);
+				}
+				float[] cachedValues = parsedDashEffects.get(pathEffect);
+				
+				p.setPathEffect(getDashEffect(rc, cachedValues, 0));
 			} else {
 				p.setPathEffect(null);
 			}
@@ -549,6 +762,9 @@ public class OsmandRenderer {
 		if(ind == 0){
 			String resId = req.getStringPropertyValue(req.ALL.R_SHADER);
 			if(resId != null){
+				if(req.getIntPropertyValue(rColor) == 0) {
+					p.setColor(Color.WHITE); // set color required by skia
+				}
 				p.setShader(getShader(resId));
 			}
 			// do not check shadow color here
@@ -557,11 +773,11 @@ public class OsmandRenderer {
 				if(shadowColor == 0) {
 					shadowColor = rc.shadowRenderingColor;
 				}
-				int shadowLayer = req.getIntPropertyValue(req.ALL.R_SHADOW_RADIUS);
+				int shadowRadius = (int) rc.getComplexValue(req, req.ALL.R_SHADOW_RADIUS);
 				if (shadowColor == 0) {
-					shadowLayer = 0;
+					shadowRadius = 0;
 				}
-				p.setShadowLayer(shadowLayer, 0, 0, shadowColor);
+				p.setShadowLayer(shadowRadius, 0, 0, shadowColor);
 			}
 		}
 		
@@ -598,7 +814,15 @@ public class OsmandRenderer {
 			IconDrawInfo ico = new IconDrawInfo();
 			ico.x = ps.x;
 			ico.y = ps.y;
+			ico.iconOrder = render.getIntPropertyValue(render.ALL.R_ICON_ORDER, 100);
+			ico.iconSize = rc.getComplexValue(render, render.ALL.R_ICON_VISIBLE_SIZE, -1);
+			ico.shieldId = render.getStringPropertyValue(render.ALL.R_SHIELD);
+			ico.resId_1 = render.getStringPropertyValue(render.ALL.R_ICON__1);
 			ico.resId = resId;
+			ico.resId2 = render.getStringPropertyValue(render.ALL.R_ICON_2);
+			ico.resId3 = render.getStringPropertyValue(render.ALL.R_ICON_3);
+			ico.resId4 = render.getStringPropertyValue(render.ALL.R_ICON_4);
+			ico.resId5 = render.getStringPropertyValue(render.ALL.R_ICON_5);
 			rc.iconsToDraw.add(ico);
 		}
 		if (renderText) {
@@ -709,13 +933,17 @@ public class OsmandRenderer {
 		if (path != null) {
 			if(drawOnlyShadow) {
 				int shadowColor = render.getIntPropertyValue(render.ALL.R_SHADOW_COLOR);
-				int shadowRadius = render.getIntPropertyValue(render.ALL.R_SHADOW_RADIUS);
+				int shadowRadius = (int) rc.getComplexValue(render, render.ALL.R_SHADOW_RADIUS);
 				if(shadowColor == 0) {
 					shadowColor = rc.shadowRenderingColor;
 				}
 				drawPolylineShadow(canvas, rc, path, shadowColor, shadowRadius);
 			} else {
 				boolean update = false;
+				if (updatePaint(render, paint, -3, false, rc)) {
+					update = true;
+					canvas.drawPath(path, paint);
+				}
 				if (updatePaint(render, paint, -2, false, rc)) {
 					update = true;
 					canvas.drawPath(path, paint);
@@ -734,10 +962,16 @@ public class OsmandRenderer {
 				if (updatePaint(render, paint, 2, false, rc)) {
 					canvas.drawPath(path, paint);
 				}
+				if (updatePaint(render, paint, 3, false, rc)) {
+					canvas.drawPath(path, paint);
+				}
+				if (updatePaint(render, paint, 4, false, rc)) {
+					canvas.drawPath(path, paint);
+				}
 			}
 			
 			if(oneway != 0 && !drawOnlyShadow){
-				Paint[] paints = oneway == -1? getReverseOneWayPaints() :  getOneWayPaints();
+				Paint[] paints = oneway == -1? getReverseOneWayPaints(rc) :  getOneWayPaints(rc);
 				for (int i = 0; i < paints.length; i++) {
 					canvas.drawPath(path, paints[i]);
 				}
@@ -749,8 +983,6 @@ public class OsmandRenderer {
 	}
 
 		
-	private static Paint[] oneWay = null;
-	private static Paint[] reverseOneWay = null;
 	private static Paint oneWayPaint(){
 		Paint oneWay = new Paint();
 		oneWay.setStyle(Style.STROKE);
@@ -759,57 +991,65 @@ public class OsmandRenderer {
 		return oneWay; 
 	}
 	
-	public static Paint[] getReverseOneWayPaints(){
-		if(reverseOneWay == null){
-			PathEffect arrowDashEffect1 = new DashPathEffect(new float[] { 0, 12, 10, 152 }, 0);
-			PathEffect arrowDashEffect2 = new DashPathEffect(new float[] { 0, 13, 9, 152 }, 1);
-			PathEffect arrowDashEffect3 = new DashPathEffect(new float[] { 0, 14, 2, 158 }, 1);
-			PathEffect arrowDashEffect4 = new DashPathEffect(new float[] { 0, 15, 1, 158 }, 1);
-			reverseOneWay = new Paint[4];
-			reverseOneWay[0] = oneWayPaint();
-			reverseOneWay[0].setStrokeWidth(1);
-			reverseOneWay[0].setPathEffect(arrowDashEffect1);
+	public Paint[] getReverseOneWayPaints(RenderingContext rc){
+		if(rc.reverseOneWay == null){
+			int rmin = (int)rc.getDensityValue(1);
+			if(rmin > 2) {
+				rmin = rmin / 2;
+			}
+			PathEffect arrowDashEffect1 = new DashPathEffect(new float[] { 0, 12, 10 * rmin, 152 }, 0);
+			PathEffect arrowDashEffect2 = new DashPathEffect(new float[] { 0, 12 + rmin, 9 * rmin, 152 }, 1);
+			PathEffect arrowDashEffect3 = new DashPathEffect(new float[] { 0, 12 + 2 * rmin, 2 * rmin, 152 + 6 * rmin }, 1);
+			PathEffect arrowDashEffect4 = new DashPathEffect(new float[] { 0, 12 + 3 * rmin, 1 * rmin, 152 + 6 * rmin }, 1);
+			rc.reverseOneWay = new Paint[4];
+			rc.reverseOneWay[0] = oneWayPaint();
+			rc.reverseOneWay[0].setStrokeWidth(rmin * 2);
+			rc.reverseOneWay[0].setPathEffect(arrowDashEffect1);
 			
-			reverseOneWay[1] = oneWayPaint();
-			reverseOneWay[1].setStrokeWidth(2);
-			reverseOneWay[1].setPathEffect(arrowDashEffect2);
+			rc.reverseOneWay[1] = oneWayPaint();
+			rc.reverseOneWay[1].setStrokeWidth(rmin);
+			rc.reverseOneWay[1].setPathEffect(arrowDashEffect2);
 
-			reverseOneWay[2] = oneWayPaint();
-			reverseOneWay[2].setStrokeWidth(3);
-			reverseOneWay[2].setPathEffect(arrowDashEffect3);
+			rc.reverseOneWay[2] = oneWayPaint();
+			rc.reverseOneWay[2].setStrokeWidth(rmin * 3);
+			rc.reverseOneWay[2].setPathEffect(arrowDashEffect3);
 			
-			reverseOneWay[3] = oneWayPaint();			
-			reverseOneWay[3].setStrokeWidth(4);
-			reverseOneWay[3].setPathEffect(arrowDashEffect4);
+			rc.reverseOneWay[3] = oneWayPaint();			
+			rc.reverseOneWay[3].setStrokeWidth(rmin * 4);
+			rc.reverseOneWay[3].setPathEffect(arrowDashEffect4);
 			
 		}
-		return oneWay;
+		return rc.reverseOneWay;
 	}
 	
-	public static Paint[] getOneWayPaints(){
-		if(oneWay == null){
-			PathEffect arrowDashEffect1 = new DashPathEffect(new float[] { 0, 12, 10, 152 }, 0);
-			PathEffect arrowDashEffect2 = new DashPathEffect(new float[] { 0, 12, 9, 153 }, 1);
-			PathEffect arrowDashEffect3 = new DashPathEffect(new float[] { 0, 18, 2, 154 }, 1);
-			PathEffect arrowDashEffect4 = new DashPathEffect(new float[] { 0, 18, 1, 155 }, 1);
-			oneWay = new Paint[4];
-			oneWay[0] = oneWayPaint();
-			oneWay[0].setStrokeWidth(1);
-			oneWay[0].setPathEffect(arrowDashEffect1);
+	public Paint[] getOneWayPaints(RenderingContext rc){
+		if(rc.oneWay == null){
+			float rmin = rc.getDensityValue(1);
+			if(rmin > 1) {
+				rmin = rmin * 2 / 3;
+			}
+			PathEffect arrowDashEffect1 = new DashPathEffect(new float[] { 0, 12, 10 * rmin, 152 }, 0);
+			PathEffect arrowDashEffect2 = new DashPathEffect(new float[] { 0, 12, 9 * rmin, 152 + rmin }, 1);
+			PathEffect arrowDashEffect3 = new DashPathEffect(new float[] { 0, 12 + 6 * rmin, 2 * rmin, 152 + 2 * rmin}, 1);
+			PathEffect arrowDashEffect4 = new DashPathEffect(new float[] { 0, 12 + 6 * rmin, 1 * rmin, 152 + 3 * rmin}, 1);
+			rc.oneWay = new Paint[4];
+			rc.oneWay[0] = oneWayPaint();
+			rc.oneWay[0].setStrokeWidth(rmin);
+			rc.oneWay[0].setPathEffect(arrowDashEffect1);
 			
-			oneWay[1] = oneWayPaint();
-			oneWay[1].setStrokeWidth(2);
-			oneWay[1].setPathEffect(arrowDashEffect2);
+			rc.oneWay[1] = oneWayPaint();
+			rc.oneWay[1].setStrokeWidth(rmin * 2);
+			rc.oneWay[1].setPathEffect(arrowDashEffect2);
 
-			oneWay[2] = oneWayPaint();
-			oneWay[2].setStrokeWidth(3);
-			oneWay[2].setPathEffect(arrowDashEffect3);
+			rc.oneWay[2] = oneWayPaint();
+			rc.oneWay[2].setStrokeWidth(rmin * 3);
+			rc.oneWay[2].setPathEffect(arrowDashEffect3);
 			
-			oneWay[3] = oneWayPaint();			
-			oneWay[3].setStrokeWidth(4);
-			oneWay[3].setPathEffect(arrowDashEffect4);
+			rc.oneWay[3] = oneWayPaint();			
+			rc.oneWay[3].setStrokeWidth(rmin * 4);
+			rc.oneWay[3].setPathEffect(arrowDashEffect4);
 			
 		}
-		return oneWay;
+		return rc.oneWay;
 	}
 }

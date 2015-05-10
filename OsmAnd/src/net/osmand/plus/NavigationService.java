@@ -1,9 +1,5 @@
 package net.osmand.plus;
 
-
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-
 import net.osmand.PlatformUtil;
 import net.osmand.access.AccessibleToast;
 import android.app.AlarmManager;
@@ -36,7 +32,10 @@ public class NavigationService extends Service implements LocationListener {
 	// global id don't conflict with others
 	private final static int NOTIFICATION_SERVICE_ID = 5;
 	public final static String OSMAND_STOP_SERVICE_ACTION  = "OSMAND_STOP_SERVICE_ACTION"; //$NON-NLS-1$
-	public final static String NAVIGATION_START_SERVICE_PARAM = "NAVIGATION_START_SERVICE_PARAM"; 
+	public static int USED_BY_NAVIGATION = 1;
+	public static int USED_BY_GPX = 2;
+	public static int USED_BY_LIVE = 4;
+	public final static String USAGE_INTENT = "SERVICE_USED_BY"; 
 	
 	private NavigationServiceBinder binder = new NavigationServiceBinder();
 
@@ -52,34 +51,8 @@ public class NavigationService extends Service implements LocationListener {
 	private static WakeLock lockStatic;
 	private PendingIntent pendingIntent;
 	private BroadcastReceiver broadcastReceiver;
-	private boolean startedForNavigation;
-	
-	private static Method mStartForeground;
-	private static Method mStopForeground;
-	private static Method mSetForeground;
+	private int usedBy = 0;
 	private OsmAndLocationProvider locationProvider;
-
-	private void checkForegroundAPI() {
-		// check new API
-		try {
-			mStartForeground = getClass().getMethod("startForeground", new Class[] {int.class, Notification.class});
-			mStopForeground = getClass().getMethod("stopForeground", new Class[] {boolean.class});
-			Log.d(PlatformUtil.TAG, "startForeground and stopForeground available");
-		} catch (NoSuchMethodException e) {
-			mStartForeground = null;
-			mStopForeground = null;
-			Log.d(PlatformUtil.TAG, "startForeground and stopForeground not available");
-		}
-
-		// check old API
-		try {
-			mSetForeground = getClass().getMethod("setForeground", new Class[] {boolean.class});
-			Log.d(PlatformUtil.TAG, "setForeground available");
-		} catch (NoSuchMethodException e) {
-			mSetForeground = null;
-			Log.d(PlatformUtil.TAG, "setForeground not available");
-		}
-	}
 
 	@Override
 	public IBinder onBind(Intent intent) {
@@ -110,18 +83,42 @@ public class NavigationService extends Service implements LocationListener {
 		return serviceOffProvider;
 	}
 	
-	public boolean startedForNavigation(){
-		return startedForNavigation;
+	public boolean isUsed() {
+		return usedBy != 0;
 	}
+	
+	public void addUsageIntent(int usageIntent) {
+		usedBy |= usageIntent;
+	}
+	
+	public void stopIfNeeded(Context ctx, int usageIntent) {
+		if((usedBy & usageIntent) > 0) {
+			usedBy -= usageIntent;
+		}
+
+		if (usedBy == 2) {
+			//reset SERVICE_OFF_INTERVAL to automatic settings for USED_BY_GPX
+			if (settings.SAVE_GLOBAL_TRACK_INTERVAL.get() < 30000) {
+				settings.SERVICE_OFF_INTERVAL.set(0);
+			} else {
+				//Use SERVICE_OFF_INTERVAL > 0 to conserve power for longer GPX recording intervals
+				settings.SERVICE_OFF_INTERVAL.set(settings.SAVE_GLOBAL_TRACK_INTERVAL.get());
+			}
+		}
+
+		if (usedBy == 0) {
+			final Intent serviceIntent = new Intent(ctx, NavigationService.class);
+			ctx.stopService(serviceIntent);
+		}
+	}
+	
 	@Override
 	public int onStartCommand(Intent intent, int flags, int startId) {
 		handler = new Handler();
 		OsmandApplication app = (OsmandApplication) getApplication();
-		ClientContext cl = app;
-		settings = cl.getSettings();
-		
-		startedForNavigation = intent.getBooleanExtra(NAVIGATION_START_SERVICE_PARAM, false);
-		if (startedForNavigation) {
+		settings = app.getSettings();
+		usedBy = intent.getIntExtra(USAGE_INTENT, 0);
+		if ((usedBy & USED_BY_NAVIGATION) != 0) {
 			serviceOffInterval = 0;
 		} else {
 			serviceOffInterval = settings.SERVICE_OFF_INTERVAL.get();
@@ -159,15 +156,18 @@ public class NavigationService extends Service implements LocationListener {
 		// registering icon at top level
 		// Leave icon visible even for navigation for proper display
 //		if (!startedForNavigation) {
-			showNotificationInStatusBar(cl);
+			showNotificationInStatusBar(app);
 //		}
 		return START_REDELIVER_INTENT;
 	}
 
-	private void showNotificationInStatusBar(ClientContext cl) {
+	private void showNotificationInStatusBar(OsmandApplication cl) {
 		broadcastReceiver = new BroadcastReceiver() {
 			@Override
 			public void onReceive(Context context, Intent intent) {
+				if(settings.SAVE_GLOBAL_TRACK_TO_GPX.get()) {
+					settings.SAVE_GLOBAL_TRACK_TO_GPX.set(false);
+				}
 				NavigationService.this.stopSelf();
 			}
 
@@ -177,36 +177,28 @@ public class NavigationService extends Service implements LocationListener {
 		Notification notification = new Notification(R.drawable.bgs_icon, "", //$NON-NLS-1$
 				System.currentTimeMillis());
 		notification.flags = Notification.FLAG_NO_CLEAR;
-		notification.setLatestEventInfo(this, Version.getAppName(cl), getString(R.string.service_stop_background_service),
-				PendingIntent.getBroadcast(this, 0, notificationIntent, PendingIntent.FLAG_UPDATE_CURRENT));
-		NotificationManager mNotificationManager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-		if (mStartForeground != null) {
-			Log.d(PlatformUtil.TAG, "invoke startForeground");
-			try {
-				mStartForeground.invoke(this, NOTIFICATION_SERVICE_ID, notification);
-			} catch (InvocationTargetException e) {
-				Log.d(PlatformUtil.TAG, "invoke startForeground failed");
-			} catch (IllegalAccessException e) {
-				Log.d(PlatformUtil.TAG, "invoke startForeground failed");
-			}
+
+		//Show currently active wake-up interval
+		int soi = settings.SERVICE_OFF_INTERVAL.get();
+		String nt = getString(R.string.service_stop_background_service) + ". " +  getString(R.string.gps_wake_up_timer) + ": ";
+		if (soi == 0) {
+			nt = nt + getString(R.string.int_continuosly);
+		} else if (soi <= 90000) {
+			nt = nt + Integer.toString(soi/1000) + " " + getString(R.string.int_seconds);
 		} else {
-			Log.d(PlatformUtil.TAG, "invoke setForeground");
-			mNotificationManager.notify(NOTIFICATION_SERVICE_ID, notification);
-			try {
-				mSetForeground.invoke(this, Boolean.TRUE);
-			} catch (InvocationTargetException e) {
-				Log.d(PlatformUtil.TAG, "invoke setForeground failed");
-			} catch (IllegalAccessException e) {
-				Log.d(PlatformUtil.TAG, "invoke setForeground failed");
-			}
+			nt = nt + Integer.toString(soi/1000/60) + " " + getString(R.string.int_min);
 		}
+
+		notification.setLatestEventInfo(this, Version.getAppName(cl) + " " + getString(R.string.osmand_service), nt,
+				PendingIntent.getBroadcast(this, 0, notificationIntent, PendingIntent.FLAG_UPDATE_CURRENT));
+
+		startForeground(NOTIFICATION_SERVICE_ID, notification);
 	}
 	
 	@Override
 	public void onCreate() {
 		super.onCreate();
 		// initializing variables
-		checkForegroundAPI();
 	}
 	
 	private boolean isContinuous(){
@@ -218,7 +210,7 @@ public class NavigationService extends Service implements LocationListener {
 	public void onDestroy() {
 		super.onDestroy();
 		((OsmandApplication)getApplication()).setNavigationService(null);
-		
+		usedBy = 0;
 		// remove updates
 		LocationManager locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
 		locationManager.removeUpdates(this);
@@ -244,26 +236,7 @@ public class NavigationService extends Service implements LocationListener {
 			broadcastReceiver = null;
 		}
 
-		if (mStopForeground != null) {
-			Log.d(PlatformUtil.TAG, "invoke stopForeground");
-			try {
-				mStopForeground.invoke(this, Boolean.TRUE);
-			} catch (InvocationTargetException e) {
-				Log.d(PlatformUtil.TAG, "invoke stopForeground failed");
-			} catch (IllegalAccessException e) {
-				Log.d(PlatformUtil.TAG, "invoke stopForeground failed");
-			}
-		}
-		else {
-			Log.d(PlatformUtil.TAG, "invoke setForeground");
-			try {
-				mSetForeground.invoke(this, Boolean.FALSE);
-			} catch (InvocationTargetException e) {
-				Log.d(PlatformUtil.TAG, "invoke setForeground failed");
-			} catch (IllegalAccessException e) {
-				Log.d(PlatformUtil.TAG, "invoke setForeground failed");
-			}
-		}
+		stopForeground(Boolean.TRUE);
 	}
 
 	@Override

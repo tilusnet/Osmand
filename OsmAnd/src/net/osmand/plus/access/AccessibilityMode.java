@@ -1,12 +1,12 @@
 package net.osmand.plus.access;
 
-import net.osmand.plus.ClientContext;
 import net.osmand.plus.R;
+import android.content.Context;
 
 public enum AccessibilityMode {
 
-    ON(R.string.accessibility_on),
-    OFF(R.string.accessibility_off),
+    ON(R.string.shared_string_on),
+    OFF(R.string.shared_string_off),
     DEFAULT(R.string.accessibility_default);
 
     private final int key;
@@ -15,7 +15,7 @@ public enum AccessibilityMode {
         this.key = key;
     }
 
-    public String toHumanString(ClientContext ctx) {
+    public String toHumanString(Context ctx) {
         return ctx.getString(key);
     }
 

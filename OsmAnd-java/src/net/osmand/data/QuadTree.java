@@ -18,9 +18,9 @@ public class QuadTree<T> {
 			bounds = new QuadRect(b.left, b.top, b.right, b.bottom);
 			children = new Node[4];
 		}
-	};
+	}
 
-	private float ratio;
+    private float ratio;
 	private int maxDepth;
 	private Node<T> root;
 
@@ -35,13 +35,31 @@ public class QuadTree<T> {
 		doInsertData(data, box, root, depth);
 	}
 	
+	public void clear() {
+		clear(root);
+	}
+	
+	private void clear(Node<T> rt) {
+		if(rt != null ){
+			if(rt.data != null) {
+				rt.data.clear();
+			}
+			if(rt.children != null) {
+				for(Node<T> c : rt.children) {
+					clear(c);
+				}
+			}
+		}
+	}
+
 	public void insert(T data, float x, float y) {
 		insert(data, new QuadRect(x, y, x, y));
 	}
 
-	public void queryInBox(QuadRect box, List<T> result) {
+	public List<T> queryInBox(QuadRect box, List<T> result) {
 		result.clear();
 		queryNode(box, result, root);
+		return result;
 	}
 
 	private void queryNode(QuadRect box, List<T> result, Node<T> node) {
@@ -85,13 +103,13 @@ public class QuadTree<T> {
 	void splitBox(QuadRect node_extent, QuadRect[] n) {
 		// coord2d c=node_extent.center();
 
-		float width = node_extent.width();
-		float height = node_extent.height();
+		double width = node_extent.width();
+		double height = node_extent.height();
 
-		float lox = node_extent.left;
-		float loy = node_extent.top;
-		float hix = node_extent.right;
-		float hiy = node_extent.bottom;
+		double lox = node_extent.left;
+		double loy = node_extent.top;
+		double hix = node_extent.right;
+		double hiy = node_extent.bottom;
 
 		n[0] = new QuadRect(lox, loy, lox + width * ratio, loy + height * ratio);
 		n[1] = new QuadRect(hix - width * ratio, loy, hix, loy + height * ratio);

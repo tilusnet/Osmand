@@ -3,13 +3,16 @@ package net.osmand.plus.activities.search;
 import java.util.Comparator;
 import java.util.List;
 
+import android.widget.AdapterView;
 import net.osmand.ResultMatcher;
 import net.osmand.data.Building;
 import net.osmand.data.City;
 import net.osmand.data.LatLon;
 import net.osmand.data.Street;
 import net.osmand.plus.OsmandApplication;
+import net.osmand.plus.OsmandSettings;
 import net.osmand.plus.R;
+import net.osmand.plus.activities.search.SearchAddressFragment.AddressInformation;
 import net.osmand.plus.resources.RegionAddressRepository;
 import net.osmand.util.Algorithms;
 import android.os.AsyncTask;
@@ -20,6 +23,7 @@ public class SearchBuildingByNameActivity extends SearchByNameAbstractActivity<B
 	private RegionAddressRepository region;
 	private City city;
 	private Street street;
+	private OsmandSettings osmandSettings;
 	
 	@Override
 	protected Comparator<? super Building> createComparator() {
@@ -32,7 +36,14 @@ public class SearchBuildingByNameActivity extends SearchByNameAbstractActivity<B
 			}
 		};
 	}
-	
+
+	@Override
+	protected void reset() {
+		//This is really only a "clear input text field", hence do not reset settings here
+		//osmandSettings.setLastSearchedBuilding("", null);
+		super.reset();
+	}
+
 	@Override
 	public AsyncTask<Object, ?, ?> getInitializeTask() {
 		return new AsyncTask<Object, Void, List<Building>>(){
@@ -44,6 +55,7 @@ public class SearchBuildingByNameActivity extends SearchByNameAbstractActivity<B
 				if (result == null || result.isEmpty()) {
 					Toast.makeText(SearchBuildingByNameActivity.this, 
 							R.string.no_buildings_found, Toast.LENGTH_LONG).show();
+                    quitActivity(SearchStreet2ByNameActivity.class);
 				}
 			}
 			
@@ -112,9 +124,14 @@ public class SearchBuildingByNameActivity extends SearchByNameAbstractActivity<B
 			text = hno;
 		}
 		settings.setLastSearchedBuilding(text, loc);
-		finish();
-		
+		quitActivity(null);
 	}
+	
+	@Override
+	protected AddressInformation getAddressInformation() {
+		return AddressInformation.buildStreet(this, settings);
+	}
+	
 	
 	@Override
 	public boolean filterObject(Building obj, String filter){
@@ -129,5 +146,8 @@ public class SearchBuildingByNameActivity extends SearchByNameAbstractActivity<B
 	}
 
 
+	@Override
+	public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
 
+	}
 }

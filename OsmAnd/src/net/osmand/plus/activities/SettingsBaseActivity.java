@@ -3,23 +3,27 @@ package net.osmand.plus.activities;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Set;
 
 import net.osmand.access.AccessibleToast;
 import net.osmand.plus.ApplicationMode;
 import net.osmand.plus.OsmandApplication;
 import net.osmand.plus.OsmandSettings;
+import net.osmand.plus.OsmandSettings.CommonPreference;
 import net.osmand.plus.OsmandSettings.OsmandPreference;
 import net.osmand.plus.R;
+import net.osmand.plus.activities.actions.AppModeDialog;
 import net.osmand.plus.views.SeekBarPreference;
-import android.app.ActionBar;
 import android.app.AlertDialog;
 import android.app.AlertDialog.Builder;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnMultiChoiceClickListener;
+import android.graphics.Color;
 import android.os.Bundle;
 import android.preference.CheckBoxPreference;
 import android.preference.EditTextPreference;
@@ -27,20 +31,25 @@ import android.preference.ListPreference;
 import android.preference.Preference;
 import android.preference.Preference.OnPreferenceChangeListener;
 import android.preference.Preference.OnPreferenceClickListener;
+import android.preference.PreferenceGroup;
 import android.preference.PreferenceScreen;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
+import android.widget.TextView;
 import android.widget.Toast;
 
-import com.actionbarsherlock.app.ActionBar.OnNavigationListener;
-import com.actionbarsherlock.app.SherlockPreferenceActivity;
 
-public abstract class SettingsBaseActivity extends SherlockPreferenceActivity implements OnPreferenceChangeListener, OnPreferenceClickListener {
+public abstract class SettingsBaseActivity extends ActionBarPreferenceActivity
+		implements OnPreferenceChangeListener, OnPreferenceClickListener {
 
 
 	
 	protected OsmandSettings settings;
 	protected final boolean profileSettings ;
-	private List<ApplicationMode> modes = new ArrayList<ApplicationMode>();
+	protected List<ApplicationMode> modes = new ArrayList<ApplicationMode>();
 	private ApplicationMode previousAppMode; 
 
 	private Map<String, Preference> screenPreferences = new LinkedHashMap<String, Preference>();
@@ -50,6 +59,7 @@ public abstract class SettingsBaseActivity extends SherlockPreferenceActivity im
 	private Map<String, OsmandPreference<Integer>> seekBarPreferences = new LinkedHashMap<String, OsmandPreference<Integer>>();
 
 	private Map<String, Map<String, ?>> listPrefValues = new LinkedHashMap<String, Map<String, ?>>();
+	private AlertDialog profileDialog;
 	
 	public SettingsBaseActivity() {
 		this(false);
@@ -59,13 +69,14 @@ public abstract class SettingsBaseActivity extends SherlockPreferenceActivity im
 		profileSettings = profile;
 	}
 
-	public CheckBoxPreference registerBooleanPreference(OsmandPreference<Boolean> b, PreferenceScreen screen) {
+	public CheckBoxPreference registerBooleanPreference(OsmandPreference<Boolean> b, PreferenceGroup screen) {
 		CheckBoxPreference p = (CheckBoxPreference) screen.findPreference(b.getId());
 		p.setOnPreferenceChangeListener(this);
 		screenPreferences.put(b.getId(), p);
 		booleanPreferences.put(b.getId(), b);
 		return p;
 	}
+
 
 	public CheckBoxPreference createCheckBoxPreference(OsmandPreference<Boolean> b, int title, int summary) {
 		CheckBoxPreference p = new CheckBoxPreference(this);
@@ -77,12 +88,58 @@ public abstract class SettingsBaseActivity extends SherlockPreferenceActivity im
 		booleanPreferences.put(b.getId(), b);
 		return p;
 	}
+	
+	public CheckBoxPreference createCheckBoxPreference(OsmandPreference<Boolean> b, String title, String summary) {
+		CheckBoxPreference p = new CheckBoxPreference(this);
+		p.setTitle(title);
+		p.setKey(b.getId());
+		p.setSummary(summary);
+		p.setOnPreferenceChangeListener(this);
+		screenPreferences.put(b.getId(), p);
+		booleanPreferences.put(b.getId(), b);
+		return p;
+	}
+	
+	public CheckBoxPreference createCheckBoxPreference(OsmandPreference<Boolean> b) {
+		CheckBoxPreference p = new CheckBoxPreference(this);
+		p.setKey(b.getId());
+		p.setOnPreferenceChangeListener(this);
+		screenPreferences.put(b.getId(), p);
+		booleanPreferences.put(b.getId(), b);
+		return p;
+	}
 
 	public void registerSeekBarPreference(OsmandPreference<Integer> b, PreferenceScreen screen) {
 		SeekBarPreference p = (SeekBarPreference) screen.findPreference(b.getId());
 		p.setOnPreferenceChangeListener(this);
 		screenPreferences.put(b.getId(), p);
 		seekBarPreferences.put(b.getId(), b);
+	}
+	
+	public static String getRoutingStringPropertyName(Context ctx, String propertyName, String defValue) {
+		try {
+			Field f = R.string.class.getField("routing_attr_" + propertyName + "_name");
+			if (f != null) {
+				Integer in = (Integer) f.get(null);
+				return ctx.getString(in);
+			}
+		} catch (Exception e) {
+			System.err.println(e.getMessage());
+		}
+		return defValue;
+	}
+	
+	public static String getRoutingStringPropertyDescription(Context ctx, String propertyName, String defValue) {
+		try {
+			Field f = R.string.class.getField("routing_attr_" + propertyName + "_description");
+			if (f != null) {
+				Integer in = (Integer) f.get(null);
+				return ctx.getString(in);
+			}
+		} catch (Exception e) {
+			System.err.println(e.getMessage());
+		}
+		return defValue;
 	}
 
 	public static String getStringPropertyName(Context ctx, String propertyName, String defValue) {
@@ -111,6 +168,20 @@ public abstract class SettingsBaseActivity extends SherlockPreferenceActivity im
 		}
 		return defValue;
 	}
+	
+	public static String getStringPropertyValue(Context ctx, String propertyValue) {		
+		try {
+			final String propertyValueReplaced = propertyValue.replaceAll("\\s+","_");
+			Field f = R.string.class.getField("rendering_value_" + propertyValueReplaced + "_name");
+			if (f != null) {
+				Integer in = (Integer) f.get(null);
+				return ctx.getString(in);
+			}
+		} catch (Exception e) {
+			System.err.println(e.getMessage());
+		}
+		return propertyValue;
+	}
 
 	public SeekBarPreference createSeekBarPreference(OsmandPreference<Integer> b, int title, int summary, int dialogTextId, int defValue,
 			int maxValue) {
@@ -124,7 +195,7 @@ public abstract class SettingsBaseActivity extends SherlockPreferenceActivity im
 		return p;
 	}
 
-	public <T> void registerListPreference(OsmandPreference<T> b, PreferenceScreen screen, String[] names, T[] values) {
+	public <T> void registerListPreference(OsmandPreference<T> b, PreferenceGroup screen, String[] names, T[] values) {
 		ListPreference p = (ListPreference) screen.findPreference(b.getId());
 		prepareListPreference(b, names, values, p);
 	}
@@ -135,6 +206,23 @@ public abstract class SettingsBaseActivity extends SherlockPreferenceActivity im
 		p.setKey(b.getId());
 		p.setDialogTitle(title);
 		p.setSummary(summary);
+		prepareListPreference(b, names, values, p);
+		return p;
+	}
+	
+	public <T> ListPreference createListPreference(OsmandPreference<T> b, String[] names, T[] values, String title, String summary) {
+		ListPreference p = new ListPreference(this);
+		p.setTitle(title);
+		p.setKey(b.getId());
+		p.setDialogTitle(title);
+		p.setSummary(summary);
+		prepareListPreference(b, names, values, p);
+		return p;
+	}
+	
+	public <T> ListPreference createListPreference(OsmandPreference<T> b, String[] names, T[] values) {
+		ListPreference p = new ListPreference(this);
+		p.setKey(b.getId());
 		prepareListPreference(b, names, values, p);
 		return p;
 	}
@@ -149,6 +237,12 @@ public abstract class SettingsBaseActivity extends SherlockPreferenceActivity im
 		for (int i = 0; i < names.length; i++) {
 			vals.put(names[i], values[i]);
 		}
+	}
+	
+	@SuppressWarnings("unused")
+	private void registerDisablePreference(OsmandPreference p, String value, OsmandPreference<Boolean> disable) {
+		LinkedHashMap<String, Object> vals = (LinkedHashMap<String, Object>) listPrefValues.get(p.getId());
+		vals.put(value, disable);
 	}
 
 	public void registerEditTextPreference(OsmandPreference<String> b, PreferenceScreen screen) {
@@ -186,26 +280,34 @@ public abstract class SettingsBaseActivity extends SherlockPreferenceActivity im
 		registerListPreference(b, screen, intDescriptions, ints);
 	}
 
-	public ListPreference createTimeListPreference(OsmandPreference<Integer> b, int[] seconds, int[] minutes, int coeff, int title,
+	public ListPreference createTimeListPreference(OsmandPreference<Integer> b, int[] seconds, int[] minutes, int coeff, int title, int summary) {
+		return createTimeListPreference(b, seconds, minutes, coeff, null, title, summary);
+	}
+	public ListPreference createTimeListPreference(OsmandPreference<Integer> b, int[] seconds, int[] minutes, int coeff, CommonPreference<Boolean> disable, int title,
 			int summary) {
 		int minutesLength = minutes == null ? 0 : minutes.length;
 		int secondsLength = seconds == null ? 0 : seconds.length;
 		Integer[] ints = new Integer[secondsLength + minutesLength];
 		String[] intDescriptions = new String[ints.length];
+		int k = 0;
 		for (int i = 0; i < secondsLength; i++) {
-			ints[i] = seconds[i] * coeff;
-			intDescriptions[i] = seconds[i] + " " + getString(R.string.int_seconds); //$NON-NLS-1$
+			ints[k] = seconds[i] * coeff;
+			intDescriptions[k] = seconds[i] + " " + getString(R.string.int_seconds); //$NON-NLS-1$
+			k++;
 		}
 		for (int i = 0; i < minutesLength; i++) {
-			ints[secondsLength + i] = (minutes[i] * 60) * coeff;
-			intDescriptions[secondsLength + i] = minutes[i] + " " + getString(R.string.int_min); //$NON-NLS-1$
+			ints[k] = (minutes[i] * 60) * coeff;
+			intDescriptions[k] = minutes[i] + " " + getString(R.string.int_min); //$NON-NLS-1$
+			k++;
 		}
-		return createListPreference(b, intDescriptions, ints, title, summary);
+		ListPreference lp = createListPreference(b, intDescriptions, ints, title, summary);
+		registerDisablePreference(b, getString(R.string.confirm_every_run), disable);
+		return lp;
 	}
 
 
 	@Override
-	public boolean onOptionsItemSelected(com.actionbarsherlock.view.MenuItem item) {
+	public boolean onOptionsItemSelected(MenuItem item) {
 		int itemId = item.getItemId();
 		switch (itemId) {
 		case android.R.id.home:
@@ -215,72 +317,67 @@ public abstract class SettingsBaseActivity extends SherlockPreferenceActivity im
 		}
 		return false;
 	}
-	
+
+	@SuppressWarnings("deprecation")
 	@Override
     public void onCreate(Bundle savedInstanceState) {
-		((OsmandApplication) getApplication()).applyTheme(this);
-		getSupportActionBar().setNavigationMode(ActionBar.NAVIGATION_MODE_STANDARD);
-		getSupportActionBar().setDisplayHomeAsUpEnabled(true);
-		getSupportActionBar().setTitle(R.string.settings_activity);
-		// R.drawable.tab_settings_screen_icon
 		super.onCreate(savedInstanceState);
-		
 		settings = getMyApplication().getSettings();
+		getToolbar().setTitle(R.string.shared_string_settings);
+
 		
 		if (profileSettings) {
 			modes.clear();
-			for (ApplicationMode a : ApplicationMode.values()) {
+			for (ApplicationMode a : ApplicationMode.values(settings)) {
 				if (a != ApplicationMode.DEFAULT) {
 					modes.add(a);
 				}
 			}
-			getSupportActionBar().setNavigationMode(ActionBar.NAVIGATION_MODE_LIST);
-			// getSupportActionBar().setNavigationMode(ActionBar.NAVIGATION_MODE_TABS);
-			// ActionBar.TabListener tl = new ActionBar.TabListener() {
-			//
-			// @Override
-			// public void onTabSelected(Tab tab, android.support.v4.app.FragmentTransaction ft) {
-			// osmandSettings.APPLICATION_MODE.set(modes.get(tab.getPosition()));
-			// createUI();
-			// updateAllSettings();
-			//
-			// }
-			//
-			// @Override
-			// public void onTabUnselected(Tab tab, android.support.v4.app.FragmentTransaction ft) {
-			// }
-			//
-			// @Override
-			// public void onTabReselected(Tab tab, android.support.v4.app.FragmentTransaction ft) {
-			// }
-			//
-			// };
-			// for (ApplicationMode a : modes) {
-			// Tab t = getSupportActionBar().newTab().setText(a.toHumanString(getMyApplication())).setTabListener(tl);
-			// getSupportActionBar().addTab(t);
-			// }
 			List<String> s = new ArrayList<String>();
 			for (ApplicationMode a : modes) {
 				s.add(a.toHumanString(getMyApplication()));
 			}
-
-			ArrayAdapter<String> spinnerAdapter = new ArrayAdapter<String>(getSupportActionBar().getThemedContext(),
-					R.layout.sherlock_spinner_item, s);
-			spinnerAdapter.setDropDownViewResource(R.layout.sherlock_spinner_dropdown_item);
-			getSupportActionBar().setListNavigationCallbacks(spinnerAdapter, new OnNavigationListener() {
+			SpinnerAdapter spinnerAdapter = new SpinnerAdapter(this,
+					R.layout.spinner_item, s);
+			int r = android.R.layout.simple_spinner_item;
+//			android.R.layout.simple_spinner_dropdown_item
+			spinnerAdapter.setDropDownViewResource(R.layout.spinner_dropdown_item);
+			getSpinner().setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+				@Override
+				public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+					settings.APPLICATION_MODE.set(modes.get(position));
+					updateAllSettings();
+				}
 
 				@Override
-				public boolean onNavigationItemSelected(int itemPosition, long itemId) {
-					settings.APPLICATION_MODE.set(modes.get(itemPosition));
-					updateAllSettings();
-					return true;
+				public void onNothingSelected(AdapterView<?> parent) {
+
 				}
 			});
+			getSpinner().setAdapter(spinnerAdapter);
+			getSpinner().setVisibility(View.VISIBLE);
 		}
 		setPreferenceScreen(getPreferenceManager().createPreferenceScreen(this));
     }
 
 
+	class SpinnerAdapter extends ArrayAdapter<String>{
+
+
+		public SpinnerAdapter(Context context, int resource, List<String> objects) {
+			super(context, resource, objects);
+		}
+
+		@Override
+		public View getDropDownView(int position, View convertView, ViewGroup parent) {
+			View view = super.getDropDownView(position, convertView, parent);
+			if (!settings.isLightActionBar()){
+				TextView textView = (TextView) view.findViewById(android.R.id.text1);
+				textView.setBackgroundColor(getResources().getColor(R.color.actionbar_dark_color));
+			}
+			return view;
+		}
+	}
 	
 
 
@@ -289,22 +386,49 @@ public abstract class SettingsBaseActivity extends SherlockPreferenceActivity im
 		super.onResume();
 		if (profileSettings) {
 			previousAppMode = settings.getApplicationMode();
-			int ind = 0;
-			boolean found = false;
-			for (ApplicationMode a : modes) {
-				if (previousAppMode == a) {
-					getSupportActionBar().setSelectedNavigationItem(ind);
-					found = true;
-					break;
-				}
-				ind++;
-			}
+			boolean found = setSelectedAppMode(previousAppMode);
 			if (!found) {
-				getSupportActionBar().setSelectedNavigationItem(0);
+				getSpinner().setSelection(0);
 			}
 		} else {
 			updateAllSettings();
 		}
+	}
+	
+	protected void profileDialog() {
+		Builder b = new AlertDialog.Builder(this);
+		final Set<ApplicationMode> selected = new LinkedHashSet<ApplicationMode>();
+		View v = AppModeDialog.prepareAppModeView(this, selected, false, null, true,
+				new View.OnClickListener() {
+					@Override
+					public void onClick(View v) {
+						if(selected.size() > 0) {
+							// test
+							setSelectedAppMode(selected.iterator().next());
+						}
+						if(profileDialog != null && profileDialog.isShowing()) {
+							profileDialog.dismiss();
+						}
+						profileDialog = null;
+					}
+				});
+		b.setTitle(R.string.profile_settings);
+		b.setView(v);
+		profileDialog = b.show();
+	}
+
+	protected boolean setSelectedAppMode(ApplicationMode am) {
+		int ind = 0;
+		boolean found = false;
+		for (ApplicationMode a : modes) {
+			if (am == a) {
+				getSpinner().setSelection(ind);
+				found = true;
+				break;
+			}
+			ind++;
+		}
+		return found;
 	}
 	
 	@Override
@@ -352,7 +476,7 @@ public abstract class SettingsBaseActivity extends SherlockPreferenceActivity im
 	@SuppressWarnings("unchecked")
 	@Override
 	public boolean onPreferenceChange(Preference preference, Object newValue) {
-		// handle boolean prefences
+		// handle boolean preferences
 		OsmandPreference<Boolean> boolPref = booleanPreferences.get(preference.getKey());
 		OsmandPreference<Integer> seekPref = seekBarPreferences.get(preference.getKey());
 		OsmandPreference<Object> listPref = (OsmandPreference<Object>) listPreferences.get(preference.getKey());
@@ -368,7 +492,14 @@ public abstract class SettingsBaseActivity extends SherlockPreferenceActivity im
 			CharSequence entry = ((ListPreference) preference).getEntries()[ind];
 			Map<String, ?> map = listPrefValues.get(preference.getKey());
 			Object obj = map.get(entry);
-			boolean changed = listPref.set(obj);
+			boolean changed ;
+			if(obj instanceof OsmandPreference) {
+				changed = true;
+				((OsmandPreference<Boolean>) obj).set(false);
+			} else {
+				changed = listPref.set(obj);
+			}
+			
 			return changed;
 		}
 		return true;

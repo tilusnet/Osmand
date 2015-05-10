@@ -48,6 +48,7 @@ public class QuickAction extends CustomPopupWindow {
 	private boolean animateTrack;
 	private ViewGroup mTrack;
 	private ArrayList<ActionItem> actionList;
+	private boolean onTop;
 	
 	/**
 	 * Constructor
@@ -84,6 +85,11 @@ public class QuickAction extends CustomPopupWindow {
 		mTrack 			= (ViewGroup) root.findViewById(R.id.tracks);
 		animStyle		= ANIM_AUTO;
 		animateTrack	= true;
+	}
+	
+	public void setOnAnchorOnTop(boolean top) {
+		this.onTop = top;
+		
 	}
 
 	/**
@@ -150,7 +156,7 @@ public class QuickAction extends CustomPopupWindow {
 		boolean onTop		= true;
 		
 		// display on bottom
-		if (rootHeight > anchor.getTop()) {
+		if (rootHeight > anchor.getTop() && !this.onTop) {
 			yPos 	= anchorRect.bottom;
 			onTop	= false;
 		}
@@ -195,7 +201,7 @@ public class QuickAction extends CustomPopupWindow {
 			} else if (arrowPos > screenWidth/4 && arrowPos < 3 * (screenWidth/4)) {
 				window.setAnimationStyle((onTop) ? R.style.Animations_PopUpMenu_Center : R.style.Animations_PopDownMenu_Center);
 			} else {
-				window.setAnimationStyle((onTop) ? R.style.Animations_PopDownMenu_Right : R.style.Animations_PopDownMenu_Right);
+				window.setAnimationStyle((onTop) ? R.style.Animations_PopUpMenu_Right : R.style.Animations_PopDownMenu_Right);
 			}
 					
 			break;

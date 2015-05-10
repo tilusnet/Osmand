@@ -5,6 +5,8 @@ import java.util.List;
 
 import net.osmand.access.AccessibleToast;
 import net.osmand.data.LatLon;
+import net.osmand.data.PointDescription;
+import net.osmand.data.RotatedTileBox;
 import net.osmand.plus.R;
 import net.osmand.plus.activities.MapActivity;
 import net.osmand.plus.views.ContextMenuLayer;
@@ -16,9 +18,6 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.PointF;
-import android.graphics.RectF;
-import android.text.format.DateFormat;
-import android.text.format.Time;
 import android.util.DisplayMetrics;
 import android.view.WindowManager;
 import android.widget.Toast;
@@ -33,9 +32,7 @@ public class ParkingPositionLayer extends OsmandMapLayer implements ContextMenuL
 	/**
 	 * magic number so far
 	 */
-	private static final int radius = 20;
-
-	private LatLon parkingPoint = null;
+	private static final int radius = 18;
 
 	private DisplayMetrics dm;
 	
@@ -57,13 +54,12 @@ public class ParkingPositionLayer extends OsmandMapLayer implements ContextMenuL
 	}
 	
 	public LatLon getParkingPoint() {
-		return parkingPoint;
+		return plugin.getParkingPosition();
 	}
 	
 	@Override
 	public void initLayer(OsmandMapTileView view) {
 		this.view = view;
-		parkingPoint = plugin.getParkingPosition();
 		dm = new DisplayMetrics();
 		WindowManager wmgr = (WindowManager) view.getContext().getSystemService(Context.WINDOW_SERVICE);
 		wmgr.getDefaultDisplay().getMetrics(dm);
@@ -72,15 +68,15 @@ public class ParkingPositionLayer extends OsmandMapLayer implements ContextMenuL
 		bitmapPaint.setDither(true);
 		bitmapPaint.setAntiAlias(true);
 		bitmapPaint.setFilterBitmap(true);
-		parkingNoLimitIcon = BitmapFactory.decodeResource(view.getResources(), R.drawable.poi_parking_pos_no_limit);
-		parkingLimitIcon = BitmapFactory.decodeResource(view.getResources(), R.drawable.poi_parking_pos_limit);
-		parkingPoint = plugin.getParkingPosition();
+		parkingNoLimitIcon = BitmapFactory.decodeResource(view.getResources(), R.drawable.map_poi_parking_pos_no_limit);
+		parkingLimitIcon = BitmapFactory.decodeResource(view.getResources(), R.drawable.map_poi_parking_pos_limit);
 		timeLimit = plugin.getParkingType();
 	}
 
 	@Override
-	public void onDraw(Canvas canvas, RectF latLonBounds, RectF tilesRect, DrawSettings nightMode) {
-		if (parkingPoint == null)
+	public void onDraw(Canvas canvas, RotatedTileBox tb, DrawSettings nightMode) {
+        LatLon parkingPoint = getParkingPoint();
+        if (parkingPoint == null)
 			return;
 		
 		Bitmap parkingIcon;
@@ -89,26 +85,26 @@ public class ParkingPositionLayer extends OsmandMapLayer implements ContextMenuL
 		} else {
 			parkingIcon = parkingLimitIcon;
 		}
-		double latitude = parkingPoint.getLatitude();
+        double latitude = parkingPoint.getLatitude();
 		double longitude = parkingPoint.getLongitude();
-		if (isLocationVisible(latitude, longitude)) {
+		if (isLocationVisible(tb, latitude, longitude)) {
 			int marginX = parkingNoLimitIcon.getWidth() / 2;
 			int marginY = parkingNoLimitIcon.getHeight();
-			int locationX = view.getMapXForPoint(longitude);
-			int locationY = view.getMapYForPoint(latitude);
+			int locationX = tb.getPixXFromLonNoRot(longitude);
+			int locationY = tb.getPixYFromLatNoRot(latitude);
 			canvas.rotate(-view.getRotate(), locationX, locationY);
 			canvas.drawBitmap(parkingIcon, locationX - marginX, locationY - marginY, bitmapPaint);
 		}
 	}
 
 	@Override
-	public boolean onSingleTap(PointF point) {
+	public boolean onSingleTap(PointF point, RotatedTileBox tileBox) {
 		List <LatLon> parkPos = new ArrayList<LatLon>();
-		getParkingFromPoint(point, parkPos);
+		getParkingFromPoint(tileBox, point, parkPos);
 		if(!parkPos.isEmpty()){
 			StringBuilder res = new StringBuilder();
 			res.append(view.getContext().getString(R.string.osmand_parking_position_description));
-			AccessibleToast.makeText(view.getContext(), getObjectDescription(parkingPoint), Toast.LENGTH_LONG).show();
+			AccessibleToast.makeText(view.getContext(), getObjectDescription(getParkingPoint()), Toast.LENGTH_LONG).show();
 			return true;
 		}
 		return false;
@@ -124,107 +120,73 @@ public class ParkingPositionLayer extends OsmandMapLayer implements ContextMenuL
 	}
 
 	@Override
-	public void collectObjectsFromPoint(PointF point, List<Object> o) {
-		getParkingFromPoint(point, o);
+	public void collectObjectsFromPoint(PointF point, RotatedTileBox tileBox, List<Object> o) {
+		getParkingFromPoint(tileBox, point, o);
 	}
 
 	@Override
 	public LatLon getObjectLocation(Object o) {
-		return parkingPoint;
+        if(o == getParkingPoint()) {
+            return getParkingPoint();
+        }
+		return null;
 	}
 	
 	@Override
 	public String getObjectDescription(Object o) {
-		if (o instanceof LatLon) {
-			StringBuilder timeLimitDesc = new StringBuilder();
-			timeLimitDesc.append(map.getString(R.string.osmand_parking_position_description_add_time) + " ");
-			timeLimitDesc.append(getFormattedTime(plugin.getStartParkingTime()) + ".");
-			if (plugin.getParkingType()) {
-				// long parkingTime = settings.getParkingTime();
-				// long parkingStartTime = settings.getStartParkingTime();
-				// Time time = new Time();
-				// time.set(parkingTime);
-				// timeLimitDesc.append(map.getString(R.string.osmand_parking_position_description_add) + " ");
-				// timeLimitDesc.append(time.hour);
-				// timeLimitDesc.append(":");
-				// int minute = time.minute;
-				// timeLimitDesc.append(minute<10 ? "0" + minute : minute);
-				// if (!DateFormat.is24HourFormat(map.getApplicationContext())) {
-				// timeLimitDesc.append(time.hour >= 12 ? map.getString(R.string.osmand_parking_pm) :
-				// map.getString(R.string.osmand_parking_am));
-				// }
-				timeLimitDesc.append(map.getString(R.string.osmand_parking_position_description_add) + " ");
-				timeLimitDesc.append(getFormattedTime(plugin.getParkingTime()));
-			}
-			return map.getString(R.string.osmand_parking_position_description, timeLimitDesc.toString());
-		}
-		return null;
+		return plugin.getParkingDescription(map);
+
 	}
 
-	String getFormattedTime(long timeInMillis) {
-		StringBuilder timeStringBuilder = new StringBuilder();
-		Time time = new Time();
-		time.set(timeInMillis);
-		timeStringBuilder.append(time.hour);
-		timeStringBuilder.append(":");
-		int minute = time.minute;
-		timeStringBuilder.append(minute < 10 ? "0" + minute : minute);
-		if (!DateFormat.is24HourFormat(map)) {
-			timeStringBuilder.append(time.hour >= 12 ? map.getString(R.string.osmand_parking_pm) : map
-					.getString(R.string.osmand_parking_am));
-		}
-		return timeStringBuilder.toString();
+	public String getFormattedTime(long time){
+		return plugin.getFormattedTime(time, map);
 	}
 	
 	@Override
-	public String getObjectName(Object o) {
-		return view.getContext().getString(R.string.osmand_parking_position_name);
+	public PointDescription getObjectName(Object o) {
+		return new PointDescription(PointDescription.POINT_TYPE_MARKER,
+				view.getContext().getString(R.string.osmand_parking_position_name), "");
 	}
 	
-	public void setParkingPointOnLayer(LatLon point, boolean timeLimit) {
-		this.timeLimit = timeLimit;
-		this.parkingPoint = point;
+	public void refresh() {
 		if (view != null) {
 			view.refreshMap();
 		}
 	}
 	
-	public void removeParkingPoint(){
-		this.parkingPoint = null;
-	}
-
 	/**
 	 * @param latitude
 	 * @param longitude
 	 * @return true if the parking point is located on a visible part of map
 	 */
-	private boolean isLocationVisible(double latitude, double longitude){
-		if(parkingPoint == null || view == null){
+	private boolean isLocationVisible(RotatedTileBox tb, double latitude, double longitude){
+		if(getParkingPoint() == null || view == null){
 			return false;
 		}
-		return view.isPointOnTheRotatedMap(latitude, longitude);
+		return tb.containsLatLon(latitude, longitude);
 	}
 	
 	/**
 	 * @param point
-	 * @param parkingPosition is in this case not necessarily has to be a list, 
-	 * but it's also used in method <link>collectObjectsFromPoint(PointF point, List<Object> o)</link>
+	 * @param parkingPosition
+	 *            is in this case not necessarily has to be a list, but it's also used in method
+	 *            <link>collectObjectsFromPoint(PointF point, List<Object> o)</link>
 	 */
-	private void getParkingFromPoint(PointF point, List<? super LatLon> parkingPosition) {
+	private void getParkingFromPoint(RotatedTileBox tb, PointF point, List<? super LatLon> parkingPosition) {
+		LatLon parkingPoint = getParkingPoint();
 		if (parkingPoint != null && view != null) {
 			int ex = (int) point.x;
 			int ey = (int) point.y;
 			LatLon position = plugin.getParkingPosition();
-			int x = view.getRotatedMapXForPoint(position.getLatitude(), position.getLongitude());
-			int y = view.getRotatedMapYForPoint(position.getLatitude(), position.getLongitude());
+			int x = (int) tb.getPixXFromLatLon(position.getLatitude(), position.getLongitude());
+			int y = (int) tb.getPixYFromLatLon(position.getLatitude(), position.getLongitude());
 			// the width of an image is 40 px, the height is 60 px -> radius = 20,
 			// the position of a parking point relatively to the icon is at the center of the bottom line of the image
-			if (Math.abs(x - ex) <= radius && ((y - ey) <= radius * 2) && ((y - ey) >= -radius)) {
+			int rad = (int) (radius * tb.getDensity());
+			if (Math.abs(x - ex) <= rad && (ey - y) <= rad && (y - ey) <= 2.5 * rad) {
 				parkingPosition.add(parkingPoint);
 			}
 		}
 	}
-	
-	
 	
 }

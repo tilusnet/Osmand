@@ -12,45 +12,45 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 
+import net.osmand.AndroidUtils;
 import net.osmand.GeoidAltitudeCorrection;
 import net.osmand.IProgress;
 import net.osmand.IndexConstants;
+import net.osmand.Location;
 import net.osmand.PlatformUtil;
 import net.osmand.ResultMatcher;
 import net.osmand.binary.BinaryMapIndexReader;
+import net.osmand.binary.BinaryMapIndexReader.SearchPoiTypeFilter;
 import net.osmand.binary.CachedOsmandIndexes;
 import net.osmand.data.Amenity;
-import net.osmand.data.AmenityType;
-import net.osmand.data.LatLon;
+import net.osmand.data.RotatedTileBox;
 import net.osmand.data.TransportStop;
 import net.osmand.map.ITileSource;
 import net.osmand.map.MapTileDownloader;
 import net.osmand.map.MapTileDownloader.DownloadRequest;
+import net.osmand.map.OsmandRegions;
+import net.osmand.osm.MapPoiTypes;
+import net.osmand.osm.PoiCategory;
+import net.osmand.plus.AppInitializer;
+import net.osmand.plus.AppInitializer.InitEvents;
 import net.osmand.plus.BusyIndicator;
-import net.osmand.plus.NameFinderPoiFilter;
 import net.osmand.plus.OsmandApplication;
 import net.osmand.plus.OsmandPlugin;
-import net.osmand.plus.PoiFilter;
 import net.osmand.plus.R;
-import net.osmand.plus.RotatedTileBox;
 import net.osmand.plus.SQLiteTileSource;
-import net.osmand.plus.SearchByNameFilter;
 import net.osmand.plus.Version;
 import net.osmand.plus.render.MapRenderRepositories;
 import net.osmand.plus.render.NativeOsmandLibrary;
-import net.osmand.plus.resources.AsyncLoadingThread.AmenityLoadRequest;
 import net.osmand.plus.resources.AsyncLoadingThread.MapLoadRequest;
 import net.osmand.plus.resources.AsyncLoadingThread.TileLoadDownloadRequest;
 import net.osmand.plus.resources.AsyncLoadingThread.TransportLoadRequest;
 import net.osmand.plus.srtmplugin.SRTMPlugin;
 import net.osmand.plus.views.OsmandMapLayer.DrawSettings;
-import net.osmand.render.RenderingRulesStorage;
 import net.osmand.util.Algorithms;
 import net.osmand.util.MapUtils;
 
@@ -64,6 +64,8 @@ import android.content.res.AssetManager;
 import android.database.sqlite.SQLiteException;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.os.HandlerThread;
+import android.text.format.DateFormat;
 import android.util.DisplayMetrics;
 import android.view.WindowManager;
 
@@ -115,27 +117,32 @@ public class ResourceManager {
 	
 	protected final List<TransportIndexRepository> transportRepositories = new ArrayList<TransportIndexRepository>();
 	
-	protected final Map<String, String> indexFileNames = Collections.synchronizedMap(new LinkedHashMap<String, String>());
+	protected final Map<String, String> indexFileNames = new ConcurrentHashMap<String, String>();
 	
-	protected final Set<String> basemapFileNames = Collections.synchronizedSet(new LinkedHashSet<String>());
+	protected final Map<String, String> basemapFileNames = new ConcurrentHashMap<String, String>();
 	
-	protected final Map<String, BinaryMapIndexReader> routingMapFiles = Collections.synchronizedMap(new LinkedHashMap<String, BinaryMapIndexReader>());
+	protected final Map<String, BinaryMapIndexReader> routingMapFiles = new ConcurrentHashMap<String, BinaryMapIndexReader>();
 	
 	protected final MapRenderRepositories renderer;
-	
+
 	protected final MapTileDownloader tileDownloader;
 	
 	public final AsyncLoadingThread asyncLoadingThread = new AsyncLoadingThread(this);
+	private HandlerThread renderingBufferImageThread;
 	
 	protected boolean internetIsNotAccessible = false;
+	private java.text.DateFormat dateFormat;
 	
 	public ResourceManager(OsmandApplication context) {
+		
 		this.context = context;
 		this.renderer = new MapRenderRepositories(context);
 		asyncLoadingThread.start();
-		
+		renderingBufferImageThread = new HandlerThread("RenderingBaseImage");
+		renderingBufferImageThread.start();
+
 		tileDownloader = MapTileDownloader.getInstance(Version.getFullVersion(context));
-		
+		dateFormat = DateFormat.getDateFormat(context);
 		resetStoreDirectory();
 		WindowManager mgr = (WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE);
 		DisplayMetrics dm = new DisplayMetrics();
@@ -144,11 +151,15 @@ public class ResourceManager {
 		// at least 3*9?
 		float tiles = (dm.widthPixels / 256 + 2) * (dm.heightPixels / 256 + 2) * 3;
 		log.info("Tiles to load in memory : " + tiles);
-		maxImgCacheSize = (int) (tiles) ; 
+		maxImgCacheSize = (int) (tiles) ;
 	}
 	
 	public MapTileDownloader getMapTileDownloader() {
 		return tileDownloader;
+	}
+	
+	public HandlerThread getRenderingBufferImageThread() {
+		return renderingBufferImageThread;
 	}
 
 	
@@ -162,40 +173,27 @@ public class ResourceManager {
 		}
 	}
 	
+	public java.text.DateFormat getDateFormat() {
+		return dateFormat;
+	}
+	
 	public OsmandApplication getContext() {
 		return context;
 	}
 	
 	////////////////////////////////////////////// Working with tiles ////////////////////////////////////////////////
 	
-	public void indexingImageTiles(IProgress progress){
-		progress.startTask(context.getString(R.string.reading_cached_tiles), -1); //$NON-NLS-1$
-		imagesOnFS.clear();
-		for(File c : dirWithTiles.listFiles()){
-			indexImageTilesFS("", c); //$NON-NLS-1$
-		}
-	}
-	
-	private void indexImageTilesFS(String prefix, File f){
-		if(f.isDirectory()){
-			for(File c : f.listFiles()){
-				indexImageTilesFS(prefix +f.getName() +"/" , c); //$NON-NLS-1$
-			}
-		} else if(f.getName().endsWith(".tile")){ //$NON-NLS-1$
-			imagesOnFS.put(prefix + f.getName(), Boolean.TRUE);
-		} else if(f.getName().endsWith(".sqlitedb")){ //$NON-NLS-1$
-			// nothing to do here
-		}
-	}
-	
-	
 	public Bitmap getTileImageForMapAsync(String file, ITileSource map, int x, int y, int zoom, boolean loadFromInternetIfNeeded) {
 		return getTileImageForMap(file, map, x, y, zoom, loadFromInternetIfNeeded, false, true);
 	}
 	
 	
-	public Bitmap getTileImageFromCache(String file){
+	public synchronized Bitmap getTileImageFromCache(String file){
 		return cacheOfImages.get(file);
+	}
+	
+	public synchronized void putTileInTheCache(String file, Bitmap bmp) {
+		cacheOfImages.put(file, bmp);
 	}
 	
 	
@@ -203,11 +201,11 @@ public class ResourceManager {
 		return getTileImageForMap(file, map, x, y, zoom, loadFromInternetIfNeeded, true, true);
 	}
 	
-	public void tileDownloaded(DownloadRequest request){
+	public synchronized void tileDownloaded(DownloadRequest request){
 		if(request instanceof TileLoadDownloadRequest){
 			TileLoadDownloadRequest req = ((TileLoadDownloadRequest) request);
 			imagesOnFS.put(req.tileId, Boolean.TRUE);
-			if(req.fileToSave != null && req.tileSource instanceof SQLiteTileSource){
+/*			if(req.fileToSave != null && req.tileSource instanceof SQLiteTileSource){
 				try {
 					((SQLiteTileSource) req.tileSource).insertImage(req.xTile, req.yTile, req.zoom, req.fileToSave);
 				} catch (IOException e) {
@@ -222,19 +220,19 @@ public class ResourceManager {
 						req.fileToSave.getParentFile().getParentFile().delete();
 					}
 				}
-			}
+			}*/
 		}
 		
 	}
 	
-	public synchronized boolean tileExistOnFileSystem(String file, ITileSource map, int x, int y, int zoom, boolean exact){
+	public synchronized boolean tileExistOnFileSystem(String file, ITileSource map, int x, int y, int zoom){
 		if(!imagesOnFS.containsKey(file)){
 			boolean ex = false;
 			if(map instanceof SQLiteTileSource){
 				if(((SQLiteTileSource) map).isLocked()){
 					return false;
 				}
-				ex = ((SQLiteTileSource) map).exists(x, y, zoom, exact);
+				ex = ((SQLiteTileSource) map).exists(x, y, zoom);
 			} else {
 				if(file == null){
 					file = calculateTileId(map, x, y, zoom);
@@ -247,7 +245,7 @@ public class ResourceManager {
 				imagesOnFS.put(file, null);
 			}
 		}
-		return imagesOnFS.get(file) != null;		
+		return imagesOnFS.get(file) != null || cacheOfImages.get(file) != null;		
 	}
 	
 	public void clearTileImageForMap(String file, ITileSource map, int x, int y, int zoom){
@@ -267,6 +265,7 @@ public class ResourceManager {
 	protected StringBuilder builder = new StringBuilder(40);
 	protected char[] tileId = new char[120];
 	private GeoidAltitudeCorrection geoidAltitudeCorrection;
+	private boolean searchAmenitiesInProgress;
 
 	public synchronized String calculateTileId(ITileSource map, int x, int y, int zoom) {
 		builder.setLength(0);
@@ -311,7 +310,7 @@ public class ResourceManager {
 		
 		if (loadFromFs && cacheOfImages.get(tileId) == null && map != null) {
 			boolean locked = map instanceof SQLiteTileSource && ((SQLiteTileSource) map).isLocked();
-			if(!loadFromInternetIfNeeded && !locked && !tileExistOnFileSystem(tileId, map, x, y, zoom, false)){
+			if(!loadFromInternetIfNeeded && !locked && !tileExistOnFileSystem(tileId, map, x, y, zoom)){
 				return null;
 			}
 			String url = loadFromInternetIfNeeded ? map.getUrlToLoad(x, y, zoom) : null;
@@ -347,7 +346,8 @@ public class ResourceManager {
 		if (cacheOfImages.size() > maxImgCacheSize) {
 			clearTiles();
 		}
-		if (req.dirWithTiles.canRead() && !asyncLoadingThread.isFileCurrentlyDownloaded(req.fileToSave)) {
+		if (req.dirWithTiles.canRead() && !asyncLoadingThread.isFileCurrentlyDownloaded(req.fileToSave)
+			&& !asyncLoadingThread.isFilePendingToDownload(req.fileToSave)) {
 			long time = System.currentTimeMillis();
 			if (log.isDebugEnabled()) {
 				log.debug("Start loaded file : " + req.tileId + " " + Thread.currentThread().getName()); //$NON-NLS-1$ //$NON-NLS-2$
@@ -355,7 +355,14 @@ public class ResourceManager {
 			Bitmap bmp = null;
 			if (req.tileSource instanceof SQLiteTileSource) {
 				try {
-				bmp = ((SQLiteTileSource) req.tileSource).getImage(req.xTile, req.yTile, req.zoom);
+					long[] tm = new long[1];
+					bmp = ((SQLiteTileSource) req.tileSource).getImage(req.xTile, req.yTile, req.zoom, tm);
+					if (tm[0] != 0) {
+						int ts = req.tileSource.getExpirationTimeMillis();
+						if (ts != -1 && req.url != null && time - tm[0] > ts) {
+							asyncLoadingThread.requestToDownload(req);
+						}
+					}
 				} catch (OutOfMemoryError e) {
 					log.error("Out of memory error", e); //$NON-NLS-1$
 					clearTiles();
@@ -365,6 +372,10 @@ public class ResourceManager {
 				if (en.exists()) {
 					try {
 						bmp = BitmapFactory.decodeFile(en.getAbsolutePath());
+						int ts = req.tileSource.getExpirationTimeMillis();
+						if(ts != -1 && req.url != null && time - en.lastModified() > ts) {
+							asyncLoadingThread.requestToDownload(req);
+						}
 					} catch (OutOfMemoryError e) {
 						log.error("Out of memory error", e); //$NON-NLS-1$
 						clearTiles();
@@ -386,25 +397,36 @@ public class ResourceManager {
 		}
 		return cacheOfImages.get(req.tileId);
 	}
-	
+
+
     ////////////////////////////////////////////// Working with indexes ////////////////////////////////////////////////
 
-	public List<String> reloadIndexes(IProgress progress){
+	public List<String> reloadIndexesOnStart(AppInitializer progress, List<String> warnings){
 		close();
-		List<String> warnings = new ArrayList<String>();
 		// check we have some assets to copy to sdcard
 		warnings.addAll(checkAssets(progress));
-		initRenderers(progress);
+		progress.notifyEvent(InitEvents.ASSETS_COPIED);
+		reloadIndexes(progress, warnings);
+		progress.notifyEvent(InitEvents.MAPS_INITIALIZED);
+		return warnings;
+	}
+
+	public List<String> reloadIndexes(IProgress progress, List<String> warnings) {
 		geoidAltitudeCorrection = new GeoidAltitudeCorrection(context.getAppPath(null));
 		// do it lazy
 		// indexingImageTiles(progress);
 		warnings.addAll(indexingMaps(progress));
 		warnings.addAll(indexVoiceFiles(progress));
 		warnings.addAll(OsmandPlugin.onIndexingFiles(progress));
-		
+		warnings.addAll(indexAdditionalMaps(progress));
 		return warnings;
 	}
-	
+
+	public List<String> indexAdditionalMaps(IProgress progress) {
+		return context.getAppCustomization().onIndexingFiles(progress, indexFileNames);
+	}
+
+
 	public List<String> indexVoiceFiles(IProgress progress){
 		File file = context.getAppPath(IndexConstants.VOICE_INDEX_DIR);
 		file.mkdirs();
@@ -419,30 +441,37 @@ public class ResourceManager {
 							conf = new File(f, "_ttsconfig.p");
 						}
 						if (conf.exists()) {
-							indexFileNames.put(f.getName(), Algorithms.formatDate(conf.lastModified())); //$NON-NLS-1$
+							indexFileNames.put(f.getName(), dateFormat.format(conf.lastModified())); //$NON-NLS-1$
 						}
 					}
 				}
 			}
 		}
 		return warnings;
-		
 	}
 	
 	private List<String> checkAssets(IProgress progress) {
-		if (!Version.getFullVersion(context)
-				.equalsIgnoreCase(context.getSettings().PREVIOUS_INSTALLED_VERSION.get())) {
+		String fv = Version.getFullVersion(context);
+		if (!fv.equalsIgnoreCase(context.getSettings().PREVIOUS_INSTALLED_VERSION.get())) {
 			File applicationDataDir = context.getAppPath(null);
 			applicationDataDir.mkdirs();
-			if(applicationDataDir.canWrite()){
+			if (applicationDataDir.canWrite()) {
 				try {
-					progress.startTask(context.getString(R.string.installing_new_resources), -1); 
+					progress.startTask(context.getString(R.string.installing_new_resources), -1);
 					AssetManager assetManager = context.getAssets();
 					boolean isFirstInstall = context.getSettings().PREVIOUS_INSTALLED_VERSION.get().equals("");
 					unpackBundledAssets(assetManager, applicationDataDir, progress, isFirstInstall);
-					context.getSettings().PREVIOUS_INSTALLED_VERSION.set(Version.getFullVersion(context));
-					
-					context.getPoiFilters().updateFilters(false);
+					context.getSettings().PREVIOUS_INSTALLED_VERSION.set(fv);
+					copyRegionsBoundaries();
+					copyPoiTypes();
+					for (String internalStyle : context.getRendererRegistry().getInternalRenderers().keySet()) {
+						File fl = context.getRendererRegistry().getFileForInternalStyle(internalStyle);
+						if (fl.exists()) {
+							context.getRendererRegistry().copyFileForInternalStyle(internalStyle);
+						}
+					}
+				} catch (SQLiteException e) {
+					log.error(e.getMessage(), e);
 				} catch (IOException e) {
 					log.error(e.getMessage(), e);
 				} catch (XmlPullParserException e) {
@@ -451,6 +480,32 @@ public class ResourceManager {
 			}
 		}
 		return Collections.emptyList();
+	}
+	
+	private void copyRegionsBoundaries() {
+		try {
+			File file = context.getAppPath("regions.ocbf");
+			if (file != null) {
+				FileOutputStream fout = new FileOutputStream(file);
+				Algorithms.streamCopy(OsmandRegions.class.getResourceAsStream("regions.ocbf"), fout);
+				fout.close();
+			}
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
+		}
+	}
+	
+	private void copyPoiTypes() {
+		try {
+			File file = context.getAppPath("poi_types.xml");
+			if (file != null) {
+				FileOutputStream fout = new FileOutputStream(file);
+				Algorithms.streamCopy(MapPoiTypes.class.getResourceAsStream("poi_types.xml"), fout);
+				fout.close();
+			}
+		} catch (Exception e) {
+			log.error(e.getMessage(), e);
+		}
 	}
 
 	private final static String ASSET_INSTALL_MODE__alwaysCopyOnFirstInstall = "alwaysCopyOnFirstInstall";
@@ -508,7 +563,6 @@ public class ResourceManager {
 		isBundledAssetsXml.close();
 	}
 
-	//TODO consider some other place for this method?
 	public static void copyAssets(AssetManager assetManager, String assetName, File file) throws IOException {
 		if(file.exists()){
 			Algorithms.removeAllFiles(file);
@@ -521,31 +575,6 @@ public class ResourceManager {
 		Algorithms.closeStream(is);
 	}
 
-	private void initRenderers(IProgress progress) {
-		File file = context.getAppPath(IndexConstants.RENDERERS_DIR);
-		file.mkdirs();
-		Map<String, File> externalRenderers = new LinkedHashMap<String, File>(); 
-		if (file.exists() && file.canRead()) {
-			File[] lf = file.listFiles();
-			if (lf != null) {
-				for (File f : lf) {
-					if (f != null && f.getName().endsWith(IndexConstants.RENDERER_INDEX_EXT)) {
-						String name = f.getName().substring(0, f.getName().length() - IndexConstants.RENDERER_INDEX_EXT.length());
-						externalRenderers.put(name, f);
-					}
-				}
-			}
-		}
-		context.getRendererRegistry().setExternalRenderers(externalRenderers);
-		String r = context.getSettings().RENDERER.get();
-		if(r != null){
-			RenderingRulesStorage obj = context.getRendererRegistry().getRenderer(r);
-			if(obj != null){
-				context.getRendererRegistry().setCurrentSelectedRender(obj);
-			}
-		}
-	}
-	
 	private List<File> collectFiles(File dir, String ext, List<File> files) {
 		if(dir.exists() && dir.canRead()) {
 			File[] lf = dir.listFiles();
@@ -576,10 +605,7 @@ public class ResourceManager {
 		if (indCache.exists()) {
 			try {
 				cachedOsmandIndexes.readFromFile(indCache, CachedOsmandIndexes.VERSION);
-				NativeOsmandLibrary nativeLib = NativeOsmandLibrary.getLoadedLibrary();
-				if (nativeLib != null) {
-					nativeLib.initCacheMapFile(indCache.getAbsolutePath());
-				}
+				
 			} catch (Exception e) {
 				log.error(e.getMessage(), e);
 			}
@@ -603,13 +629,13 @@ public class ResourceManager {
 					warnings.add(MessageFormat.format(context.getString(R.string.version_index_is_not_supported), f.getName())); //$NON-NLS-1$
 				} else {
 					if (index.isBasemap()) {
-						basemapFileNames.add(f.getName());
+						basemapFileNames.put(f.getName(), f.getName());
 					}
 					long dateCreated = index.getDateCreated();
 					if (dateCreated == 0) {
 						dateCreated = f.lastModified();
 					}
-					indexFileNames.put(f.getName(), Algorithms.formatDate(dateCreated)); //$NON-NLS-1$
+					indexFileNames.put(f.getName(), dateFormat.format(dateCreated)); //$NON-NLS-1$
 					for (String rName : index.getRegionNames()) {
 						// skip duplicate names (don't make collision between getName() and name in the map)
 						// it can be dangerous to use one file to different indexes if it is multithreaded
@@ -662,21 +688,80 @@ public class ResourceManager {
 		}
 		return warnings;
 	}
-	
-	////////////////////////////////////////////// Working with amenities ////////////////////////////////////////////////
-	public List<Amenity> searchAmenities(PoiFilter filter,
-			double topLatitude, double leftLongitude, double bottomLatitude, double rightLongitude, 
-			double lat, double lon, ResultMatcher<Amenity> matcher) {
-		List<Amenity> amenities = new ArrayList<Amenity>();
-		for (AmenityIndexRepository index : amenityRepositories) {
-			if (index.checkContains(topLatitude, leftLongitude, bottomLatitude, rightLongitude)) {
-				index.searchAmenities(MapUtils.get31TileNumberY(topLatitude), MapUtils.get31TileNumberX(leftLongitude), 
-						MapUtils.get31TileNumberY(bottomLatitude), MapUtils.get31TileNumberX(rightLongitude), -1, filter, amenities, matcher);
+
+	public void initMapBoundariesCacheNative() {
+		File indCache = context.getAppPath(INDEXES_CACHE);
+		if (indCache.exists()) {
+			NativeOsmandLibrary nativeLib = NativeOsmandLibrary.getLoadedLibrary();
+			if (nativeLib != null) {
+				nativeLib.initCacheMapFile(indCache.getAbsolutePath());
 			}
 		}
-
+	}
+	
+	////////////////////////////////////////////// Working with amenities ////////////////////////////////////////////////
+	public List<Amenity> searchAmenities(SearchPoiTypeFilter filter,
+			double topLatitude, double leftLongitude, double bottomLatitude, double rightLongitude, int zoom, final ResultMatcher<Amenity> matcher) {
+		final List<Amenity> amenities = new ArrayList<Amenity>();
+		searchAmenitiesInProgress = true;
+		try {
+			if (!filter.isEmpty()) {
+				for (AmenityIndexRepository index : amenityRepositories) {
+					if (index.checkContains(topLatitude, leftLongitude, bottomLatitude, rightLongitude)) {
+						List<Amenity> r = index.searchAmenities(MapUtils.get31TileNumberY(topLatitude),
+								MapUtils.get31TileNumberX(leftLongitude), MapUtils.get31TileNumberY(bottomLatitude),
+								MapUtils.get31TileNumberX(rightLongitude), zoom, filter, matcher);
+						if(r != null) {
+							amenities.addAll(r);
+						}
+					}
+				}
+			}
+		} finally {
+			searchAmenitiesInProgress = false;
+		}
 		return amenities;
 	}
+	
+	public List<Amenity> searchAmenitiesOnThePath(List<Location> locations, double radius, SearchPoiTypeFilter filter,
+			ResultMatcher<Amenity> matcher) {
+		searchAmenitiesInProgress = true;
+		final List<Amenity> amenities = new ArrayList<Amenity>();
+		try {
+			if (locations != null && locations.size() > 0) {
+				List<AmenityIndexRepository> repos = new ArrayList<AmenityIndexRepository>();
+				double topLatitude = locations.get(0).getLatitude();
+				double bottomLatitude = locations.get(0).getLatitude();
+				double leftLongitude = locations.get(0).getLongitude();
+				double rightLongitude = locations.get(0).getLongitude();
+				for (Location l : locations) {
+					topLatitude = Math.max(topLatitude, l.getLatitude());
+					bottomLatitude = Math.min(bottomLatitude, l.getLatitude());
+					leftLongitude = Math.min(leftLongitude, l.getLongitude());
+					rightLongitude = Math.max(rightLongitude, l.getLongitude());
+				}
+				if (!filter.isEmpty()) {
+					for (AmenityIndexRepository index : amenityRepositories) {
+						if (index.checkContains(topLatitude, leftLongitude, bottomLatitude, rightLongitude)) {
+							repos.add(index);
+						}
+					}
+					if (!repos.isEmpty()) {
+						for (AmenityIndexRepository r : repos) {
+							List<Amenity> res = r.searchAmenitiesOnThePath(locations, radius, filter, matcher);
+							if(res != null) {
+								amenities.addAll(res);
+							}
+						}
+					}
+				}
+			}
+		} finally {
+			searchAmenitiesInProgress = false;
+		}
+		return amenities;
+	}
+	
 	
 	public boolean containsAmenityRepositoryToSearch(boolean searchByName){
 		for (AmenityIndexRepository index : amenityRepositories) {
@@ -722,8 +807,8 @@ public class ResourceManager {
 		return amenities;
 	}
 	
-	public Map<AmenityType, List<String>> searchAmenityCategoriesByName(String searchQuery, double lat, double lon) {
-		Map<AmenityType, List<String>> map = new LinkedHashMap<AmenityType, List<String>>();
+	public Map<PoiCategory, List<String>> searchAmenityCategoriesByName(String searchQuery, double lat, double lon) {
+		Map<PoiCategory, List<String>> map = new LinkedHashMap<PoiCategory, List<String>>();
 		for (AmenityIndexRepository index : amenityRepositories) {
 			if (index instanceof AmenityIndexRepositoryBinary) {
 				if (index.checkContains(lat, lon)) {
@@ -734,34 +819,6 @@ public class ResourceManager {
 		return map;
 	}
 	
-	public void searchAmenitiesAsync(double topLatitude, double leftLongitude, double bottomLatitude, double rightLongitude, int zoom, PoiFilter filter, List<Amenity> toFill){
-		if(filter instanceof NameFinderPoiFilter || filter instanceof SearchByNameFilter){
-			List<Amenity> amenities = filter instanceof NameFinderPoiFilter  ? 
-					((NameFinderPoiFilter) filter).getSearchedAmenities() :((SearchByNameFilter) filter).getSearchedAmenities() ;
-			for(Amenity a : amenities){
-				LatLon l = a.getLocation();
-				if(l != null && l.getLatitude() <= topLatitude && l.getLatitude() >= bottomLatitude && l.getLongitude() >= leftLongitude && l.getLongitude() <= rightLongitude){
-					toFill.add(a);
-				}
-			}
-		} else {
-			String filterId = filter == null ? null : filter.getFilterId();
-			List<AmenityIndexRepository> repos = new ArrayList<AmenityIndexRepository>();
-			for (AmenityIndexRepository index : amenityRepositories) {
-				if (index.checkContains(topLatitude, leftLongitude, bottomLatitude, rightLongitude)) {
-					if (!index.checkCachedAmenities(topLatitude, leftLongitude, bottomLatitude, rightLongitude, zoom, filterId, toFill,
-							true)) {
-						repos.add(index);
-					}
-				}
-			}
-			if(!repos.isEmpty()){
-				AmenityLoadRequest req = asyncLoadingThread.new AmenityLoadRequest(repos, zoom, filter, filter.getFilterByName());
-				req.setBoundaries(topLatitude, leftLongitude, bottomLatitude, rightLongitude);
-				asyncLoadingThread.requestToLoadAmenities(req);
-			}
-		}
-	}
 	
 	////////////////////////////////////////////// Working with address ///////////////////////////////////////////
 	
@@ -772,6 +829,7 @@ public class ResourceManager {
 	public Collection<RegionAddressRepository> getAddressRepositories(){
 		return addressMap.values();
 	}
+	
 	
 	////////////////////////////////////////////// Working with transport ////////////////////////////////////////////////
 	public List<TransportIndexRepository> searchTransportRepositories(double latitude, double longitude) {
@@ -802,18 +860,21 @@ public class ResourceManager {
 	}
 	
 	////////////////////////////////////////////// Working with map ////////////////////////////////////////////////
-	public boolean updateRenderedMapNeeded(RotatedTileBox rotatedTileBox, DrawSettings drawSettings){
-		return renderer.updateMapIsNeeded(rotatedTileBox,drawSettings);
+	public boolean updateRenderedMapNeeded(RotatedTileBox rotatedTileBox, DrawSettings drawSettings) {
+		return renderer.updateMapIsNeeded(rotatedTileBox, drawSettings);
 	}
 	
 	public void updateRendererMap(RotatedTileBox rotatedTileBox){
 		renderer.interruptLoadingMap();
-		asyncLoadingThread.requestToLoadMap(
-				new MapLoadRequest(new RotatedTileBox(rotatedTileBox)));
+		asyncLoadingThread.requestToLoadMap(new MapLoadRequest(rotatedTileBox));
 	}
 	
 	public void interruptRendering(){
 		renderer.interruptLoadingMap();
+	}
+	
+	public boolean isSearchAmenitiesInProgress() {
+		return searchAmenitiesInProgress;
 	}
 	
 	public MapRenderRepositories getRenderer() {
@@ -897,7 +958,7 @@ public class ResourceManager {
 			if (lf != null) {
 				for (File f : lf) {
 					if (f != null && f.getName().endsWith(IndexConstants.BINARY_MAP_INDEX_EXT)) {
-						map.put(f.getName(), Algorithms.formatDate(f.lastModified())); //$NON-NLS-1$		
+						map.put(f.getName(), AndroidUtils.formatDate(context, f.lastModified())); //$NON-NLS-1$		
 					}
 				}
 			}
@@ -913,9 +974,6 @@ public class ResourceManager {
 	public void onLowMemory() {
 		log.info("On low memory : cleaning tiles - size = " + cacheOfImages.size()); //$NON-NLS-1$
 		clearTiles();
-		for(AmenityIndexRepository r : amenityRepositories){
-			r.clearCache();
-		}
 		for(RegionAddressRepository r : addressMap.values()){
 			r.clearCache();
 		}
@@ -926,6 +984,10 @@ public class ResourceManager {
 	
 	public GeoidAltitudeCorrection getGeoidAltitudeCorrection() {
 		return geoidAltitudeCorrection;
+	}
+
+	public OsmandRegions getOsmandRegions() {
+		return context.getRegions();
 	}
 	
 	

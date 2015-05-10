@@ -3,19 +3,22 @@ package net.osmand.plus.base;
 import java.io.File;
 import java.util.ArrayList;
 
-import org.apache.commons.logging.Log;
-
 import net.osmand.PlatformUtil;
 import net.osmand.access.AccessibleAlertBuilder;
 import net.osmand.data.LatLon;
 import net.osmand.plus.GPXUtilities;
 import net.osmand.plus.GPXUtilities.GPXFile;
+import net.osmand.plus.TargetPointsHelper.TargetPoint;
 import net.osmand.plus.OsmandApplication;
 import net.osmand.plus.OsmandSettings;
 import net.osmand.plus.R;
 import net.osmand.plus.TargetPointsHelper;
 import net.osmand.plus.activities.MapActivity;
-import net.osmand.plus.routing.RouteProvider.GPXRouteParams;
+import net.osmand.plus.routing.RoutingHelper;
+import net.osmand.plus.routing.RouteProvider.GPXRouteParamsBuilder;
+
+import org.apache.commons.logging.Log;
+
 import android.app.AlertDialog;
 import android.app.AlertDialog.Builder;
 import android.content.DialogInterface;
@@ -35,7 +38,7 @@ public class FailSafeFuntions {
 		final Handler uiHandler = new Handler();
 		final String gpxPath = settings.FOLLOW_THE_GPX_ROUTE.get();
 		final TargetPointsHelper targetPoints = app.getTargetPointsHelper();
-		final LatLon pointToNavigate = targetPoints.getPointToNavigate();
+		final TargetPoint pointToNavigate = targetPoints.getPointToNavigate();
 		if (pointToNavigate == null && gpxPath == null) {
 			notRestoreRoutingMode(ma, app);
 		} else {
@@ -51,7 +54,7 @@ public class FailSafeFuntions {
 					tv.setText(ma.getString(R.string.continue_follow_previous_route_auto, delay + ""));
 					tv.setPadding(7, 5, 7, 5);
 					builder.setView(tv);
-					builder.setPositiveButton(R.string.default_buttons_yes, new DialogInterface.OnClickListener() {
+					builder.setPositiveButton(R.string.shared_string_yes, new DialogInterface.OnClickListener() {
 						@Override
 						public void onClick(DialogInterface dialog, int which) {
 							quitRouteRestoreDialog = true;
@@ -59,7 +62,7 @@ public class FailSafeFuntions {
 
 						}
 					});
-					builder.setNegativeButton(R.string.default_buttons_no, new DialogInterface.OnClickListener() {
+					builder.setNegativeButton(R.string.shared_string_no, new DialogInterface.OnClickListener() {
 						@Override
 						public void onClick(DialogInterface dialog, int which) {
 							quitRouteRestoreDialog = true;
@@ -111,7 +114,7 @@ public class FailSafeFuntions {
 						protected GPXFile doInBackground(String... params) {
 							if (gpxPath != null) {
 								// Reverse also should be stored ?
-								GPXFile f = GPXUtilities.loadGPXFile(app, new File(gpxPath), false);
+								GPXFile f = GPXUtilities.loadGPXFile(app, new File(gpxPath));
 								if (f.warning != null) {
 									return null;
 								}
@@ -123,15 +126,30 @@ public class FailSafeFuntions {
 
 						@Override
 						protected void onPostExecute(GPXFile result) {
-							final GPXRouteParams gpxRoute = result == null ? null : new GPXRouteParams(result, false, settings);
-							LatLon endPoint = pointToNavigate != null ? pointToNavigate : gpxRoute.getLastPoint();
-							net.osmand.Location startPoint = gpxRoute == null ? null : gpxRoute.getStartPointForRoute();
+							final GPXRouteParamsBuilder gpxRoute;
+							if (result != null) {
+								gpxRoute = new GPXRouteParamsBuilder(result, settings);
+								if (settings.GPX_ROUTE_CALC_OSMAND_PARTS.get()) {
+									gpxRoute.setCalculateOsmAndRouteParts(true);
+								}
+								if (settings.GPX_CALCULATE_RTEPT.get()) {
+									gpxRoute.setUseIntermediatePointsRTE(true);
+								}
+								if(settings.GPX_ROUTE_CALC.get()) {
+									gpxRoute.setCalculateOsmAndRoute(true);
+								}
+							} else {
+								gpxRoute = null;
+							}
+							TargetPoint endPoint = pointToNavigate;
 							if (endPoint == null) {
 								notRestoreRoutingMode(ma, app);
 							} else {
-								ma.followRoute(settings.getApplicationMode(), endPoint, targetPoints.getIntermediatePoints(), startPoint, gpxRoute);
+								enterRoutingMode(ma, gpxRoute);
 							}
 						}
+
+						
 					};
 					task.execute(gpxPath);
 
@@ -140,6 +158,25 @@ public class FailSafeFuntions {
 			encapsulate.run();
 		}
 
+	}
+	
+	public static void enterRoutingMode(MapActivity ma, 
+			GPXRouteParamsBuilder gpxRoute) {
+		OsmandApplication app = ma.getMyApplication();
+		ma.getMapViewTrackingUtilities().backToLocationImpl();
+		RoutingHelper routingHelper = app.getRoutingHelper();
+		if(gpxRoute == null) {
+			app.getSettings().FOLLOW_THE_GPX_ROUTE.set(null);
+		}
+		routingHelper.setGpxParams(gpxRoute);
+		app.getTargetPointsHelper().setStartPoint(null, false, null);
+		app.getSettings().FOLLOW_THE_ROUTE.set(true);
+		routingHelper.setFollowingMode(true);
+		app.getTargetPointsHelper().updateRouteAndReferesh(true);
+		app.initVoiceCommandPlayer(ma);
+		if(ma.getDashboard().isVisible()) {
+			ma.getDashboard().hideDashboard();
+		}
 	}
 	
 	private static void notRestoreRoutingMode(MapActivity ma, OsmandApplication app){

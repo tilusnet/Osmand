@@ -8,9 +8,6 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.text.DateFormat;
-import java.util.Date;
-import java.util.Locale;
 
 import net.osmand.PlatformUtil;
 
@@ -26,6 +23,34 @@ public class Algorithms {
 	
 	public static boolean isEmpty(String s){
 		return s == null || s.length() == 0;
+	}
+	
+	public static long parseLongSilently(String input, long def) {
+		if(input != null && input.length() > 0) {
+			try {
+				return Long.parseLong(input);
+			} catch (NumberFormatException e) {
+				return def;
+			}
+		}
+		return def;
+	}
+	
+	public static int findFirstNumberEndIndex(String value) {
+		int i = 0;
+		boolean valid = false;
+		if (value.length() > 0 && value.charAt(0) == '-') {
+			i++;
+		}
+		while (i < value.length() && (Character.isDigit(value.charAt(i)) || value.charAt(i) == '.')) {
+			i++;
+			valid = true;
+		}
+		if (valid) {
+			return i;
+		} else {
+			return -1;
+		}
 	}
 	
 	/**
@@ -54,7 +79,7 @@ public class Algorithms {
         int ch4 = in.read();
         if ((ch1 | ch2 | ch3 | ch4) < 0)
             throw new EOFException();
-        return ((ch1 << 24) + (ch2 << 16) + (ch3 << 8) + (ch4 << 0));
+        return ((ch1 << 24) + (ch2 << 16) + (ch3 << 8) + ch4);
     }
 	
 	public static String capitalizeFirstLetterAndLowercase(String s) {
@@ -74,6 +99,31 @@ public class Algorithms {
 			return a.equals(b);
 		}
 	}
+	
+	
+	/**
+     	* Parse the color string, and return the corresponding color-int.
+     	* If the string cannot be parsed, throws an IllegalArgumentException
+     	* exception. Supported formats are:
+     	* #RRGGBB
+     	* #AARRGGBB
+     	* 'red', 'blue', 'green', 'black', 'white', 'gray', 'cyan', 'magenta',
+     	* 'yellow', 'lightgray', 'darkgray'
+     	*/
+    	public static int parseColor(String colorString) {
+        	if (colorString.charAt(0) == '#') {
+            	// Use a long to avoid rollovers on #ffXXXXXX
+            	long color = Long.parseLong(colorString.substring(1), 16);
+            	if (colorString.length() == 7) {
+	                // Set the alpha value
+        	        color |= 0x00000000ff000000;
+            	} else if (colorString.length() != 9) {
+                	throw new IllegalArgumentException("Unknown color " + colorString); //$NON-NLS-1$
+            	}
+            	return (int)color;
+        	}
+        	throw new IllegalArgumentException("Unknown color " + colorString); //$NON-NLS-1$
+    	}
 	
 	public static int extractFirstIntegerNumber(String s) {
 		int i = 0;
@@ -162,7 +212,7 @@ public class Algorithms {
 		o = o << 8 | (0xff & bytes[offset + 3]);
 		o = o << 8 | (0xff & bytes[offset + 2]);
 		o = o << 8 | (0xff & bytes[offset + 1]);
-		o = o << 8 | (0xff & bytes[offset + 0]);
+		o = o << 8 | (0xff & bytes[offset]);
 		return o;
 	}
 	
@@ -191,7 +241,7 @@ public class Algorithms {
 		int o = (0xff & bytes[offset + 3]) << 24;
 		o |= (0xff & bytes[offset + 2]) << 16;
 		o |= (0xff & bytes[offset + 1]) << 8;
-		o |= (0xff & bytes[offset + 0]);
+		o |= (0xff & bytes[offset]);
 		return o;
 	}
 	
@@ -244,7 +294,7 @@ public class Algorithms {
 	
 	public static int parseSmallIntFromBytes(byte[] bytes, int offset) {
 		int s = (0xff & bytes[offset + 1]) << 8;
-		s |= (0xff & bytes[offset + 0]);
+		s |= (0xff & bytes[offset]);
 		return s;
 	}
 	
@@ -295,29 +345,12 @@ public class Algorithms {
 		}
 		return defaultValue;
 	}
-	
-	private static java.text.DateFormat dateFormat;
-	private static java.text.DateFormat dateTimeFormat;
-	public static String formatDate(long t) {
-		return getDateFormat().format(new Date(t));
-	}
 
-	public static DateFormat getDateFormat() {
-		if(dateFormat == null) {
-			dateFormat = DateFormat.getDateInstance(DateFormat.SHORT, Locale.getDefault());
+	public static String colorToString(int color) {
+		if ((0xFF000000 & color) == 0xFF000000) {
+			return "#" + Integer.toHexString(color & 0x00FFFFFF); //$NON-NLS-1$
+		} else {
+			return "#" + Integer.toHexString(color); //$NON-NLS-1$
 		}
-		return dateFormat;
 	}
-	
-	public static DateFormat getDateTimeFormat() {
-		if (dateTimeFormat == null) {
-			dateTimeFormat = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT, Locale.getDefault());
-		}
-		return dateTimeFormat;
-	}
-
-	public static String formatDateTime(long t) {
-		return getDateTimeFormat().format(new Date(t));
-	}
-	
 }

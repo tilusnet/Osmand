@@ -123,11 +123,21 @@ public class OsmMapUtils {
 		}
 	}
 
-	public static void simplifyDouglasPeucker(List<Node> n, int zoom, int epsilon, List<Node> result) {
+    public static boolean ccw(Node A, Node B, Node C) {
+        return (C.getLatitude()-A.getLatitude()) * (B.getLongitude()-A.getLongitude()) > (B.getLatitude()-A.getLatitude()) *
+                (C.getLongitude()-A.getLongitude());
+    }
+
+    // Return true if line segments AB and CD intersect
+    public static boolean intersect2Segments(Node A, Node B, Node C, Node D) {
+        return ccw(A, C, D) != ccw(B, C, D) && ccw(A, B, C) != ccw(A, B, D);
+    }
+
+	public static boolean[] simplifyDouglasPeucker(List<Node> n, int zoom, int epsilon, List<Node> result, boolean avoidNooses) {
 		if (zoom > 31) {
 			zoom = 31;
 		}
-		ArrayList<Integer> l = new ArrayList<Integer>();
+		boolean[] kept = new boolean[n.size()];
 		int first = 0;
 		int nsize = n.size();
 		while (first < nsize) {
@@ -144,7 +154,7 @@ public class OsmMapUtils {
 			last--;
 		}
 		if (last - first < 1) {
-			return;
+			return kept;
 		}
 		// check for possible cycle
 		boolean checkCycle = true;
@@ -163,20 +173,25 @@ public class OsmMapUtils {
 			}
 		}
 		if (last - first < 1) {
-			return;
+			return kept;
 		}
-		simplifyDouglasPeucker(n, zoom, epsilon, l, first, last);
+		simplifyDouglasPeucker(n, zoom, epsilon, kept, first, last, avoidNooses);
 		result.add(n.get(first));
-		int lsize = l.size();
-		for (int i = 0; i < lsize; i++) {
-			result.add(n.get(l.get(i)));
+		for (int i = 0; i < kept.length; i++) {
+			if(kept[i]) {
+				result.add(n.get(i));
+			}
 		}
 		if (cycle) {
 			result.add(n.get(first));
 		}
+		kept[first] = true;
+		
+		return kept;
 	}
 
-	private static void simplifyDouglasPeucker(List<Node> n, int zoom, int epsilon, List<Integer> ints, int start, int end) {
+	private static void simplifyDouglasPeucker(List<Node> n, int zoom, int epsilon, boolean[] kept,
+                                               int start, int end, boolean avoidNooses) {
 		double dmax = -1;
 		int index = -1;
 		for (int i = start + 1; i <= end - 1; i++) {
@@ -189,11 +204,31 @@ public class OsmMapUtils {
 				index = i;
 			}
 		}
-		if (dmax >= epsilon) {
-			simplifyDouglasPeucker(n, zoom, epsilon, ints, start, index);
-			simplifyDouglasPeucker(n, zoom, epsilon, ints, index, end);
+        boolean nooseFound = false;
+        if(avoidNooses && index >= 0) {
+            Node st = n.get(start);
+            Node e = n.get(end);
+            for(int i = 0; i < n.size() - 1; i++) {
+                if(i == start - 1) {
+                    i = end;
+                    continue;
+                }
+                Node np = n.get(i);
+                Node np2 = n.get(i + 1);
+                if(np == null || np2 == null) {
+                    continue;
+                }
+                if (OsmMapUtils.intersect2Segments(st, e, np, np2)) {
+                    nooseFound = true;
+                    break;
+                }
+            }
+        }
+		if (dmax >= epsilon || nooseFound ) {
+			simplifyDouglasPeucker(n, zoom, epsilon, kept, start, index, avoidNooses);
+			simplifyDouglasPeucker(n, zoom, epsilon, kept, index, end, avoidNooses);
 		} else {
-			ints.add(end);
+			kept[end] = true;
 		}
 	}
 
@@ -307,6 +342,27 @@ public class OsmMapUtils {
 		}
 	}
 
+    /**
+     * Get the area in pixels
+     * @param nodes
+     * @return
+     */
+    public static double polygonAreaPixels(List<Node> nodes, int zoom) {
+        double area = 0.;
+        double mult = 1 / MapUtils.getPowZoom((double)Math.max(31 - (zoom + 8), 0));
+        int j = nodes.size() - 1;
+        for (int i = 0; i < nodes.size(); i++) {
+            Node x = nodes.get(i);
+            Node y = nodes.get(j);
+            if(x != null && y != null) {
+            area += (MapUtils.get31TileNumberX(y.getLongitude()) + (double)MapUtils.get31TileNumberX(x.getLongitude()))*
+                    (MapUtils.get31TileNumberY(y.getLatitude()) - (double)MapUtils.get31TileNumberY(x.getLatitude()));
+            }
+            j = i;
+        }
+        return Math.abs(area) * mult * mult * .5;
+    }
+
 	/**
 	 * Get the area (in m²) of a closed way, represented as a list of nodes
 	 * 
@@ -348,4 +404,6 @@ public class OsmMapUtils {
 
 		return Math.abs(area) / 2;
 	}
+
+
 }

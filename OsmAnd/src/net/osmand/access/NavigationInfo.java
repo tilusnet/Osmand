@@ -6,11 +6,11 @@ import java.util.List;
 
 import net.osmand.Location;
 import net.osmand.data.LatLon;
-import net.osmand.plus.ClientContext;
 import net.osmand.plus.OsmAndFormatter;
 import net.osmand.plus.OsmandApplication;
 import net.osmand.plus.OsmandSettings;
 import net.osmand.plus.R;
+import net.osmand.plus.TargetPointsHelper.TargetPoint;
 import net.osmand.plus.access.RelativeDirectionStyle;
 import android.app.AlertDialog;
 import android.content.Context;
@@ -87,7 +87,7 @@ public class NavigationInfo {
 				return null;
 			if (style == RelativeDirectionStyle.CLOCKWISE) {
 				String result = NavigationInfo.this.getString(R.string.towards);
-				result += " " + String.valueOf((value != 0) ? value : 12); //$NON-NLS-1$
+				result += " " + ((value != 0) ? value : 12); //$NON-NLS-1$
 				result += " " + NavigationInfo.this.getString(R.string.oclock); //$NON-NLS-1$
 				return result;
 			} else {
@@ -124,7 +124,7 @@ public class NavigationInfo {
 			R.string.north_west, 
 			R.string.north_north_west };
 
-	private final ClientContext context;
+	private final OsmandApplication context;
 	private final OsmandSettings settings;
 	private Location currentLocation;
 	private RelativeDirection lastDirection;
@@ -160,8 +160,11 @@ public class NavigationInfo {
 	}
 
 	// Get distance and direction string for specified point
-	public synchronized String getDirectionString(final Location point, Float heading) {
-		if ((currentLocation != null) && (point != null)) {
+	public synchronized String getDirectionString(final LatLon apoint, Float heading) {
+		if ((currentLocation != null) && (apoint != null)) {
+			Location point = new Location("");
+			point.setLatitude(apoint.getLatitude());
+			point.setLongitude(apoint.getLongitude());
 			RelativeDirection direction = null;
 			String result = distanceString(point);
 			result += " "; //$NON-NLS-1$
@@ -178,16 +181,6 @@ public class NavigationInfo {
 				result += absoluteDirectionString(currentLocation.bearingTo(point));
 			}
 			return result;
-		}
-		return null;
-	}
-
-	public synchronized String getDirectionString(final LatLon point, Float heading) {
-		if (point != null) {
-			Location destination = new Location("map"); //$NON-NLS-1$
-			destination.setLatitude(point.getLatitude());
-			destination.setLongitude(point.getLongitude());
-			return getDirectionString(destination, heading);
 		}
 		return null;
 	}
@@ -228,8 +221,8 @@ public class NavigationInfo {
 
 	public synchronized void setLocation(Location location) {
 		currentLocation = location;
-		if (autoAnnounce && context.getInternalAPI().accessibilityEnabled()) {
-			final LatLon point = app.getTargetPointsHelper().getPointToNavigate();
+		if (autoAnnounce && context.accessibilityEnabled()) {
+			final TargetPoint point = app.getTargetPointsHelper().getPointToNavigate();
 			if (point != null) {
 				if ((currentLocation != null) && currentLocation.hasBearing()) {
 					final long now = SystemClock.uptimeMillis();
@@ -256,11 +249,11 @@ public class NavigationInfo {
 	}
 
 	// Show all available info
-	public void show(final LatLon point, Float heading, Context ctx) {
+	public void show(final TargetPoint point, Float heading, Context ctx) {
 		final List<String> attributes = new ArrayList<String>();
 		String item;
 
-		item = getDirectionString(point, heading);
+		item = getDirectionString(point == null ? null : point.point, heading);
 		if (item != null)
 			attributes.add(item);
 		item = getSpeedString();
@@ -285,7 +278,7 @@ public class NavigationInfo {
 							dialog.cancel();
 						}
 					});
-		info.setNegativeButton(R.string.close, new DialogInterface.OnClickListener() {
+		info.setNegativeButton(R.string.shared_string_close, new DialogInterface.OnClickListener() {
 			@Override
 			public void onClick(DialogInterface dialog, int id) {
 				dialog.cancel();

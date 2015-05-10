@@ -4,14 +4,14 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.TreeMap;
 
-import net.osmand.PlatformUtil;
+import net.osmand.OsmAndCollator;
 import net.osmand.util.Algorithms;
 
 public class City extends MapObject {
 	public enum CityType {
 		// that's tricky way to play with that numbers (to avoid including suburbs in city & vice verse)
 		// district special type and it is not registered as a city
-		CITY(10000), TOWN(5000), VILLAGE(1300), HAMLET(1000), SUBURB(400), DISTRICT(400);
+		CITY(10000), TOWN(5000), VILLAGE(1300), HAMLET(1000), SUBURB(400), DISTRICT(400), NEIGHBOURHOOD(300);
 
 		private double radius;
 
@@ -42,9 +42,10 @@ public class City extends MapObject {
 
 	private CityType type = null;
 	// Be attentive ! Working with street names ignoring case
-	private Map<String, Street> streets = new TreeMap<String, Street>(PlatformUtil.primaryCollator());
+	private Map<String, Street> streets = new TreeMap<String, Street>(OsmAndCollator.primaryCollator());
 	private String isin = null;
 	private String postcode = null;
+	private City closestCity = null;
 
 	private static long POSTCODE_INTERNAL_ID = -1000;
 	public static City createPostcode(String postcode){
@@ -91,6 +92,14 @@ public class City extends MapObject {
 
 	public void setPostcode(String postcode) {
 		this.postcode = postcode;
+	}
+	
+	public City getClosestCity() {
+		return closestCity;
+	}
+	
+	public void setClosestCity(City closestCity) {
+		this.closestCity = closestCity;
 	}
 
 	protected Street registerStreet(Street street, boolean en) {

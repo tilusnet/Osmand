@@ -1,52 +1,80 @@
 package net.osmand.plus;
 
+import java.text.DecimalFormat;
 import java.text.MessageFormat;
+import java.util.Map.Entry;
 
 import net.osmand.data.Amenity;
-import net.osmand.data.AmenityType;
 import net.osmand.data.City.CityType;
+import net.osmand.osm.PoiCategory;
+import net.osmand.osm.PoiType;
 import net.osmand.plus.OsmandSettings.MetricsConstants;
+import net.osmand.util.Algorithms;
+import android.content.Context;
 
 public class OsmAndFormatter {
-	private final static float METERS_IN_KILOMETER = 1000f;
-	private final static float METERS_IN_ONE_MILE = 1609.344f; // 1609.344
-	private final static float YARDS_IN_ONE_METER = 1.0936f;
-	private final static float FOOTS_IN_ONE_METER = YARDS_IN_ONE_METER * 3f;
+	public final static float METERS_IN_KILOMETER = 1000f;
+	public final static float METERS_IN_ONE_MILE = 1609.344f; // 1609.344
+	public final static float YARDS_IN_ONE_METER = 1.0936f;
+	public final static float FOOTS_IN_ONE_METER = YARDS_IN_ONE_METER * 3f;
+	private static final DecimalFormat fixed2 = new DecimalFormat("0.00");
+	private static final DecimalFormat fixed1 = new DecimalFormat("0.0");
+	{
+		fixed2.setMinimumFractionDigits(2);
+		fixed1.setMinimumFractionDigits(1);
+		fixed1.setMinimumIntegerDigits(1);
+		fixed2.setMinimumIntegerDigits(1);
+	}
 	
-	public static double calculateRoundedDist(double distInMeters, ClientContext ctx) {
+	public static double calculateRoundedDist(double distInMeters, OsmandApplication ctx) {
 		OsmandSettings settings = ctx.getSettings();
 		MetricsConstants mc = settings.METRIC_SYSTEM.get();
 		double mainUnitInMeter = 1;
-		double metersInSecondUnit = METERS_IN_KILOMETER; 
+		double metersInSecondUnit = METERS_IN_KILOMETER;
 		if (mc == MetricsConstants.MILES_AND_FOOTS) {
 			mainUnitInMeter = FOOTS_IN_ONE_METER;
 			metersInSecondUnit = METERS_IN_ONE_MILE;
-		} else if(mc == MetricsConstants.MILES_AND_YARDS){
+		} else if (mc == MetricsConstants.MILES_AND_YARDS) {
 			mainUnitInMeter = YARDS_IN_ONE_METER;
-			metersInSecondUnit = METERS_IN_ONE_MILE ;
+			metersInSecondUnit = METERS_IN_ONE_MILE;
 		}
 		// 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000 ...
-		
+
 		int generator = 1;
 		byte pointer = 1;
 		double point = mainUnitInMeter;
-		while(distInMeters * point > generator){
+		double roundDist = 1;
+		while (distInMeters * point > generator) {
+			roundDist = (generator / point);
 			if (pointer++ % 3 == 2) {
 				generator = generator * 5 / 2;
 			} else {
 				generator *= 2;
 			}
-			if(point == mainUnitInMeter && metersInSecondUnit * mainUnitInMeter * 0.9f <= generator ){
+			
+			if (point == mainUnitInMeter && metersInSecondUnit * mainUnitInMeter * 0.9f <= generator) {
 				point = 1 / metersInSecondUnit;
 				generator = 1;
 				pointer = 1;
 			}
 		}
-		
-		return (generator / point);
+
+		return roundDist;
 	}
 	
-	public static String getFormattedDistance(float meters, ClientContext ctx) {
+	public static String getFormattedRoundDistanceKm(float meters, int digits, OsmandApplication ctx) {
+		int mainUnitStr = R.string.km;
+		float mainUnitInMeters = METERS_IN_KILOMETER;
+		if (digits == 0) {
+			return (int) (meters / mainUnitInMeters + 0.5) + " " + ctx.getString(mainUnitStr); //$NON-NLS-1$
+		} else if (digits == 1) {
+			return fixed1.format(((float) meters) / mainUnitInMeters) + " " + ctx.getString(mainUnitStr); 
+		} else {
+			return fixed2.format(((float) meters) / mainUnitInMeters) + " " + ctx.getString(mainUnitStr);
+		}
+	}
+	
+	public static String getFormattedDistance(float meters, OsmandApplication ctx) {
 		OsmandSettings settings = ctx.getSettings();
 		MetricsConstants mc = settings.METRIC_SYSTEM.get();
 		int mainUnitStr;
@@ -62,9 +90,9 @@ public class OsmAndFormatter {
 		if (meters >= 100 * mainUnitInMeters) {
 			return (int) (meters / mainUnitInMeters + 0.5) + " " + ctx.getString(mainUnitStr); //$NON-NLS-1$
 		} else if (meters > 9.99f * mainUnitInMeters) {
-			return MessageFormat.format("{0,number,#.#} " + ctx.getString(mainUnitStr), ((float) meters) / mainUnitInMeters); //$NON-NLS-1$
+			return MessageFormat.format("{0,number,#.#} " + ctx.getString(mainUnitStr), ((float) meters) / mainUnitInMeters).replace('\n', ' '); //$NON-NLS-1$
 		} else if (meters > 0.999f * mainUnitInMeters) {
-			return MessageFormat.format("{0,number,#.##} " + ctx.getString(mainUnitStr), ((float) meters) / mainUnitInMeters); //$NON-NLS-1$
+			return MessageFormat.format("{0,number,#.##} " + ctx.getString(mainUnitStr), ((float) meters) / mainUnitInMeters).replace('\n', ' '); //$NON-NLS-1$
 		} else {
 			if (mc == MetricsConstants.KILOMETERS_AND_METERS) {
 				return ((int) (meters + 0.5)) + " " + ctx.getString(R.string.m); //$NON-NLS-1$
@@ -79,7 +107,7 @@ public class OsmAndFormatter {
 		}
 	}
 
-	public static String getFormattedAlt(double alt, ClientContext ctx) {
+	public static String getFormattedAlt(double alt, OsmandApplication ctx) {
 		OsmandSettings settings = ctx.getSettings();
 		MetricsConstants mc = settings.METRIC_SYSTEM.get();
 		if (mc == MetricsConstants.KILOMETERS_AND_METERS) {
@@ -89,13 +117,14 @@ public class OsmAndFormatter {
 		}
 	}
 	
-	public static String getFormattedSpeed(float metersperseconds, ClientContext ctx) {
+	public static String getFormattedSpeed(float metersperseconds, OsmandApplication ctx) {
 		OsmandSettings settings = ctx.getSettings();
 		MetricsConstants mc = settings.METRIC_SYSTEM.get();
 		ApplicationMode am = settings.getApplicationMode();
 		float kmh = metersperseconds * 3.6f;
 		if (mc == MetricsConstants.KILOMETERS_AND_METERS) {
-			if (kmh >= 10 || (am == ApplicationMode.CAR)) {
+			if (kmh >= 10 || am.hasFastSpeed()) {
+				// case of car
 				return ((int) Math.round(kmh)) + " " + ctx.getString(R.string.km_h);
 			}
 			int kmh10 = (int) (kmh * 10f);
@@ -113,7 +142,7 @@ public class OsmAndFormatter {
 	}
 	
 	
-	public static String toPublicString(CityType t, ClientContext ctx) {
+	public static String toPublicString(CityType t, Context ctx) {
 		switch (t) {
 		case CITY:
 			return ctx.getString(R.string.city_type_city);
@@ -125,71 +154,23 @@ public class OsmAndFormatter {
 			return ctx.getString(R.string.city_type_village);
 		case SUBURB:
 			return ctx.getString(R.string.city_type_suburb);
+		default:
+			break;
 		}
 		return "";
 	}
 
-	public static String toPublicString(AmenityType t, ClientContext ctx) {
-		switch (t) {
-		case ADMINISTRATIVE:
-			return ctx.getString(R.string.amenity_type_administrative);
-		case BARRIER:
-			return ctx.getString(R.string.amenity_type_barrier);
-		case EDUCATION:
-			return ctx.getString(R.string.amenity_type_education);
-		case EMERGENCY:
-			return ctx.getString(R.string.amenity_type_emergency);
-		case ENTERTAINMENT:
-			return ctx.getString(R.string.amenity_type_entertainment);
-		case FINANCE:
-			return ctx.getString(R.string.amenity_type_finance);
-		case GEOCACHE:
-			return ctx.getString(R.string.amenity_type_geocache);
-		case HEALTHCARE:
-			return ctx.getString(R.string.amenity_type_healthcare);
-		case HISTORIC:
-			return ctx.getString(R.string.amenity_type_historic);
-		case LANDUSE:
-			return ctx.getString(R.string.amenity_type_landuse);
-		case LEISURE:
-			return ctx.getString(R.string.amenity_type_leisure);
-		case MAN_MADE:
-			return ctx.getString(R.string.amenity_type_manmade);
-		case MILITARY:
-			return ctx.getString(R.string.amenity_type_military);
-		case NATURAL:
-			return ctx.getString(R.string.amenity_type_natural);
-		case OFFICE:
-			return ctx.getString(R.string.amenity_type_office);
-		case OTHER:
-			return ctx.getString(R.string.amenity_type_other);
-		case SHOP:
-			return ctx.getString(R.string.amenity_type_shop);
-		case SPORT:
-			return ctx.getString(R.string.amenity_type_sport);
-		case SUSTENANCE:
-			return ctx.getString(R.string.amenity_type_sustenance);
-		case TOURISM:
-			return ctx.getString(R.string.amenity_type_tourism);
-		case TRANSPORTATION:
-			return ctx.getString(R.string.amenity_type_transportation);
-		case USER_DEFINED:
-			return ctx.getString(R.string.amenity_type_user_defined);
-		case OSMWIKI :
-			return ctx.getString(R.string.amenity_type_wikiosm);
-		}
-		return "";
-	}
-
-	
-	public static String getPoiSimpleFormat(Amenity amenity, ClientContext ctx, boolean en){
-		return toPublicString(amenity.getType(), ctx) + " : " + getPoiStringWithoutType(amenity, en); //$NON-NLS-1$
-	}
-	
 	public static String getPoiStringWithoutType(Amenity amenity, boolean en) {
-		String type = SpecialPhrases.getSpecialPhrase(amenity.getSubType());
+		PoiCategory pc = amenity.getType();
+		PoiType pt = pc.getPoiTypeByKeyName(amenity.getSubType());
+		String nm = amenity.getSubType();
+		if (pt != null) {
+			nm = pt.getTranslation();
+		} else if(nm != null){
+			nm = Algorithms.capitalizeFirstLetterAndLowercase(nm.replace('_', ' '));
+		}
 		String n = amenity.getName(en);
-		if (n.indexOf(type) != -1) {
+		if (n.indexOf(nm) != -1) {
 			// type is contained in name e.g.
 			// n = "Bakery the Corner"
 			// type = "Bakery"
@@ -197,8 +178,41 @@ public class OsmAndFormatter {
 			return n;
 		}
 		if (n.length() == 0) {
-			return type;
+			return nm;
 		}
-		return type + " " + n; //$NON-NLS-1$
+		return nm + " " + n; //$NON-NLS-1$
+	}
+
+	public static String getAmenityDescriptionContent(Context ctx, Amenity amenity, boolean shortDescription) {
+		StringBuilder d = new StringBuilder();
+		for(Entry<String, String>  e : amenity.getAdditionalInfo().entrySet()) {
+			String key = e.getKey();
+			String vl = e.getValue();
+			if(Amenity.DESCRIPTION.equals(key)) {
+				if(shortDescription) {
+					continue;
+				}
+			} else if(Amenity.OPENING_HOURS.equals(key)) {
+				d.append(ctx.getString(R.string.opening_hours) + ": ");
+			} else if(Amenity.PHONE.equals(key)) {
+				d.append(ctx.getString(R.string.phone) + ": ");
+			} else if(Amenity.WEBSITE.equals(key)) {
+				if(amenity.getType().isWiki()) {
+					continue;
+				}
+				d.append(ctx.getString(R.string.website) + ": ");
+			} else {
+				PoiCategory pc = amenity.getType();
+				PoiType pt = pc.getPoiTypeByKeyName(e.getKey());
+				if (pt != null) {
+					vl = pt.getTranslation();
+				} else {
+					vl = Algorithms.capitalizeFirstLetterAndLowercase(e.getKey());
+				}
+				vl += ": " + e.getValue();
+			}
+			d.append(vl).append('\n');
+		}
+		return d.toString().trim();
 	}
 }

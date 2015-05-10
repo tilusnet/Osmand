@@ -15,7 +15,7 @@ public class SQLiteAPIImpl implements SQLiteAPI {
 	@Override
 	public SQLiteConnection getOrCreateDatabase(String name, boolean readOnly) {
 		android.database.sqlite.SQLiteDatabase db = app.openOrCreateDatabase(name,
-				readOnly? SQLiteDatabase.OPEN_READONLY : SQLiteDatabase.OPEN_READWRITE, null);
+				readOnly? SQLiteDatabase.OPEN_READONLY : (SQLiteDatabase.OPEN_READWRITE | SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING), null);
 		if(db == null) {
 			return null;
 		}
@@ -54,6 +54,11 @@ public class SQLiteAPIImpl implements SQLiteAPI {
 				@Override
 				public boolean moveToNext() {
 					return c.moveToNext();
+				}
+				
+				@Override
+				public String[] getColumnNames() {
+					return c.getColumnNames();
 				}
 				
 				@Override
@@ -180,8 +185,9 @@ public class SQLiteAPIImpl implements SQLiteAPI {
 
 	@Override
 	public SQLiteConnection openByAbsolutePath(String path, boolean readOnly) {
+		// fix http://stackoverflow.com/questions/26937152/workaround-for-nexus-9-sqlite-file-write-operations-on-external-dirs
 		android.database.sqlite.SQLiteDatabase db = SQLiteDatabase.openDatabase(path, null,
-				readOnly? SQLiteDatabase.OPEN_READONLY : SQLiteDatabase.OPEN_READWRITE);
+				readOnly? SQLiteDatabase.OPEN_READONLY : (SQLiteDatabase.OPEN_READWRITE | SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING));
 		if(db == null) {
 			return null;
 		}

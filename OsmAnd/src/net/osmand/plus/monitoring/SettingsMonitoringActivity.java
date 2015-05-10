@@ -1,8 +1,10 @@
 package net.osmand.plus.monitoring;
 
 
+import android.view.Window;
 import net.osmand.plus.NavigationService;
 import net.osmand.plus.OsmAndTaskManager.OsmAndTaskRunnable;
+import net.osmand.plus.OsmandApplication;
 import net.osmand.plus.OsmandSettings;
 import net.osmand.plus.R;
 import net.osmand.plus.activities.SavingTrackHelper;
@@ -20,7 +22,6 @@ import android.preference.Preference.OnPreferenceClickListener;
 import android.preference.PreferenceCategory;
 import android.preference.PreferenceScreen;
 
-import com.actionbarsherlock.view.Window;
 
 public class SettingsMonitoringActivity extends SettingsBaseActivity {
 	private CheckBoxPreference routeServiceEnabled;
@@ -28,20 +29,21 @@ public class SettingsMonitoringActivity extends SettingsBaseActivity {
 	
 	public static final int[] BG_SECONDS = new int[]{0, 30, 60, 90};
 	public static final int[] BG_MINUTES = new int[]{2, 3, 5, 10, 15, 30, 60, 90};
-	private final static boolean REGISTER_BG_SETTINGS = true;
+	private final static boolean REGISTER_BG_SETTINGS = false;
 	private static final int[] SECONDS = OsmandMonitoringPlugin.SECONDS;
 	private static final int[] MINUTES = OsmandMonitoringPlugin.MINUTES;
 	
 	public SettingsMonitoringActivity() {
 		super(true);
 	}
-	
+
 	@Override
     public void onCreate(Bundle savedInstanceState) {
-		requestWindowFeature(Window.FEATURE_INDETERMINATE_PROGRESS);
+		((OsmandApplication) getApplication()).applyTheme(this);
+		requestWindowFeature(Window.FEATURE_PROGRESS);
 		super.onCreate(savedInstanceState);
-		setSupportProgressBarIndeterminateVisibility(false);
-		getSupportActionBar().setTitle(R.string.monitoring_settings);
+		setProgressVisibility(false);
+		getToolbar().setTitle(R.string.monitoring_settings);
 		PreferenceScreen grp = getPreferenceScreen();
 		
 		createLoggingSection(grp);
@@ -49,18 +51,28 @@ public class SettingsMonitoringActivity extends SettingsBaseActivity {
 		if(REGISTER_BG_SETTINGS) {
 			registerBackgroundSettings();
 		}
+		profileDialog();
     }
 
 
 	private void createLoggingSection(PreferenceScreen grp) {
 		PreferenceCategory cat = new PreferenceCategory(this);
-		cat.setTitle(R.string.save_track_to_gpx);
+		cat.setTitle(R.string.save_track_to_gpx_globally);
 		grp.addPreference(cat);
-		
-		cat.addPreference(createCheckBoxPreference(settings.SAVE_TRACK_TO_GPX, R.string.save_track_to_gpx,
-				R.string.save_track_to_gpx_descrp));
-		cat.addPreference(createTimeListPreference(settings.SAVE_TRACK_INTERVAL, SECONDS,
-				MINUTES, 1000, R.string.save_track_interval, R.string.save_track_interval_descr));
+
+		Preference globalrecord = new Preference(this);
+		globalrecord.setTitle(R.string.save_track_to_gpx_globally_headline);
+		globalrecord.setSummary(R.string.save_track_to_gpx_globally_descr);
+		globalrecord.setSelectable(false);
+		//setEnabled(false) creates bad readability on some devices
+		//globalrecord.setEnabled(false);
+		cat.addPreference(globalrecord);
+
+		if(settings.SAVE_GLOBAL_TRACK_REMEMBER.get()) {
+			cat.addPreference(createTimeListPreference(settings.SAVE_GLOBAL_TRACK_INTERVAL, SECONDS,
+					MINUTES, 1000, settings.SAVE_GLOBAL_TRACK_REMEMBER,  R.string.save_global_track_interval, R.string.save_global_track_interval_descr));
+		}
+
 		Preference pref = new Preference(this);
 		pref.setTitle(R.string.save_current_track);
 		pref.setSummary(R.string.save_current_track_descr);
@@ -77,19 +89,25 @@ public class SettingsMonitoringActivity extends SettingsBaseActivity {
 			}
 		});
 		cat.addPreference(pref);
+
+		cat.addPreference(createCheckBoxPreference(settings.SAVE_TRACK_TO_GPX, R.string.save_track_to_gpx,
+				R.string.save_track_to_gpx_descrp));
+		cat.addPreference(createTimeListPreference(settings.SAVE_TRACK_INTERVAL, SECONDS,
+				MINUTES, 1000, R.string.save_track_interval, R.string.save_track_interval_descr));
 	}
 
 
 	private void createLiveSection(PreferenceScreen grp) {
 		PreferenceCategory cat;
 		cat = new PreferenceCategory(this);
-		cat.setTitle(R.string.live_monitoring);
+		cat.setTitle(R.string.live_monitoring_m);
 		grp.addPreference(cat);
 		
 		cat.addPreference(createEditTextPreference(settings.LIVE_MONITORING_URL, R.string.live_monitoring_url,
 				R.string.live_monitoring_url_descr));
-		cat.addPreference(createCheckBoxPreference(settings.LIVE_MONITORING, R.string.live_monitoring,
-				R.string.live_monitoring_descr));
+		final CheckBoxPreference liveMonitoring = createCheckBoxPreference(settings.LIVE_MONITORING, R.string.live_monitoring_m,
+				R.string.live_monitoring_m_descr);
+		cat.addPreference(liveMonitoring);
 		cat.addPreference(createTimeListPreference(settings.LIVE_MONITORING_INTERVAL, SECONDS,
 				MINUTES, 1000, R.string.live_monitoring_interval, R.string.live_monitoring_interval_descr));
 	}
@@ -104,19 +122,19 @@ public class SettingsMonitoringActivity extends SettingsBaseActivity {
 	}
 	
 	private void saveCurrentTracks(final SavingTrackHelper helper) {
-		setSupportProgressBarIndeterminateVisibility(true);
+		setProgressVisibility(true);
 		getMyApplication().getTaskManager().runInBackground(new OsmAndTaskRunnable<Void, Void, Void>() {
 
 			@Override
 			protected Void doInBackground(Void... params) {
 				SavingTrackHelper helper = getMyApplication().getSavingTrackHelper();
-				helper.saveDataToGpx();
+				helper.saveDataToGpx(getMyApplication().getAppCustomization().getTracksDir());
 				helper.close();
 				return null;
 			}
 			@Override
 			protected void onPostExecute(Void result) {
-				setSupportProgressBarIndeterminateVisibility(false);
+				setProgressVisibility(false);
 			}
 
 		}, (Void) null);

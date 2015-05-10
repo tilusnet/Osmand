@@ -7,6 +7,8 @@ import java.util.List;
 
 import net.osmand.data.LatLon;
 import net.osmand.data.MapObject;
+import net.osmand.data.QuadPoint;
+import net.osmand.util.GeoPointParserUtil.GeoParsedPoint;
 
 
 /**
@@ -19,7 +21,9 @@ import net.osmand.data.MapObject;
  */
 public class MapUtils {
 	
-	private static final String BASE_SHORT_OSM_URL = "http://osm.org/go/";
+    // TODO change the hostname back to osm.org once HTTPS works for it
+    // https://github.com/openstreetmap/operations/issues/2
+    private static final String BASE_SHORT_OSM_URL = "https://openstreetmap.org/go/";
 	
 	/**
      * This array is a lookup table that translates 6-bit positive integer
@@ -31,7 +35,7 @@ public class MapUtils {
         'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
         'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
         'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
-        '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '_', '@'
+        '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '_', '~'
     };
 
 	public static double getDistance(LatLon l, double latitude, double longitude){
@@ -40,8 +44,7 @@ public class MapUtils {
 	
 	private static double scalarMultiplication(double xA, double yA, double xB, double yB, double xC, double yC) {
 		// Scalar multiplication between (AB, AC)
-		double multiple = (xB - xA) * (xC - xA) + (yB- yA) * (yC -yA);
-		return multiple;
+		return (xB - xA) * (xC - xA) + (yB- yA) * (yC -yA);
 	}
 
 	public static double getOrthogonalDistance(double lat, double lon, double fromLat, double fromLon, double toLat, double toLon) {
@@ -85,8 +88,7 @@ public class MapUtils {
 		//double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 		//return R * c * 1000;
 		// simplyfy haversine:
-		double c = 2 * R * 1000 * Math.asin(Math.sqrt(a));
-		return c;
+		return (2 * R * 1000 * Math.asin(Math.sqrt(a)));
 	}
 	
 	
@@ -98,6 +100,9 @@ public class MapUtils {
 	}
 	
 	public static double checkLongitude(double longitude) {
+		if(longitude > -180 && longitude <= 180) {
+			return longitude;
+		}
 		while (longitude < -180 || longitude > 180) {
 			if (longitude < 0) {
 				longitude += 360;
@@ -109,6 +114,9 @@ public class MapUtils {
 	}
 	
 	public static double checkLatitude(double latitude) {
+		if(latitude > -80 && latitude <= 80) {
+			return latitude;
+		}
 		while (latitude < -90 || latitude > 90) {
 			if (latitude < 0) {
 				latitude += 180;
@@ -126,13 +134,13 @@ public class MapUtils {
 	
 	public static int get31TileNumberX(double longitude){
 		longitude = checkLongitude(longitude);
-		long l = 1l << 31;
+		long l = 1L << 31;
 		return (int)((longitude + 180d)/360d * l);
 	}
 	public static int get31TileNumberY( double latitude){
 		latitude = checkLatitude(latitude);
 		double eval = Math.log( Math.tan(toRadians(latitude)) + 1/Math.cos(toRadians(latitude)) );
-		long l = 1l << 31;
+		long l = 1L << 31;
 		if(eval > Math.PI){
 			eval = Math.PI;
 		}
@@ -157,11 +165,13 @@ public class MapUtils {
 	 */
 	
 	public static double getTileNumberX(float zoom, double longitude){
-		if(longitude == 180d) {
-			return getPowZoom(zoom) - 1;
-		}
 		longitude = checkLongitude(longitude);
-		return (longitude + 180d)/360d * getPowZoom(zoom);
+		final double powZoom = getPowZoom(zoom);
+		double dz = (longitude + 180d)/360d * powZoom;
+		if (dz >= powZoom) {
+			return powZoom - 0.01;
+		}
+		return dz;
 	}
 	
 	public static double getTileNumberY(float zoom,  double latitude){
@@ -171,8 +181,7 @@ public class MapUtils {
 			latitude = latitude < 0 ? - 89.9 : 89.9;
 			eval = Math.log( Math.tan(toRadians(latitude)) + 1/Math.cos(toRadians(latitude)) );
 		}
-		double result = (1 - eval / Math.PI) / 2 * getPowZoom(zoom);
-		return  result;
+		return (1 - eval / Math.PI) / 2 * getPowZoom(zoom);
 	}
 	
 	public static double getTileEllipsoidNumberY(float zoom, double latitude){
@@ -214,12 +223,18 @@ public class MapUtils {
 	}
 	
 	
-	public static double getLongitudeFromTile(float zoom, double x) {
+	public static double getTileDistanceWidth(float zoom) {
+		LatLon ll = new LatLon(30, MapUtils.getLongitudeFromTile(zoom, 0));
+		LatLon ll2 = new LatLon(30, MapUtils.getLongitudeFromTile(zoom, 1));
+		return getDistance(ll, ll2) ;
+	}
+	
+	public static double getLongitudeFromTile(double zoom, double x) {
 		return x / getPowZoom(zoom) * 360.0 - 180.0;
 	}
 	
-	public static double getPowZoom(float zoom){
-		if(zoom >= 0 && zoom - Math.floor(zoom) < 0.05f){
+	public static double getPowZoom(double zoom){
+		if(zoom >= 0 && zoom - Math.floor(zoom) < 0.001f){
 			return 1 << ((int)zoom); 
 		} else {
 			return Math.pow(2, zoom);
@@ -236,19 +251,18 @@ public class MapUtils {
 		return (rotateSin * dTileX + rotateCos * dTileY) * tileSize ;
 	}
 	
-	public static double getLatitudeFromTile(float zoom, double y){
+	public static double getLatitudeFromTile(float zoom, double y) {
 		int sign = y < 0 ? -1 : 1;
-		double result = Math.atan(sign*Math.sinh(Math.PI * (1 - 2 * y / getPowZoom(zoom)))) * 180d / Math.PI;
-		return result;
+		return Math.atan(sign * Math.sinh(Math.PI * (1 - 2 * y / getPowZoom(zoom)))) * 180d / Math.PI;
 	}
 	
 	
-	public static int getPixelShiftX(int zoom, double long1, double long2, int tileSize){
+	public static int getPixelShiftX(float zoom, double long1, double long2, double tileSize){
 		return (int) ((getTileNumberX(zoom, long1) - getTileNumberX(zoom, long2)) * tileSize);
 	}
 	
 	
-	public static int getPixelShiftY(int zoom, double lat1, double lat2, int tileSize){
+	public static int getPixelShiftY(float zoom, double lat1, double lat2, double tileSize){
 		return (int) ((getTileNumberY(zoom, lat1) - getTileNumberY(zoom, lat2)) * tileSize);
 	}
 	
@@ -264,22 +278,21 @@ public class MapUtils {
 		});
 	}
 	
+	public static String buildGeoUrl(double latitude, double longitude, int zoom) {
+        return "geo:" + ((float) latitude) + "," + ((float)longitude) + "?z=" + zoom;
+	}
 	
 	// Examples
 //	System.out.println(buildShortOsmUrl(51.51829d, 0.07347d, 16)); // http://osm.org/go/0EEQsyfu
 //	System.out.println(buildShortOsmUrl(52.30103d, 4.862927d, 18)); // http://osm.org/go/0E4_JiVhs
 //	System.out.println(buildShortOsmUrl(40.59d, -115.213d, 9)); // http://osm.org/go/TelHTB--
 	public static String buildShortOsmUrl(double latitude, double longitude, int zoom){
-		StringBuilder str = new StringBuilder(10);
-		str.append(BASE_SHORT_OSM_URL);
-		str.append(createShortLocString(latitude, longitude, zoom));
-		str.append("?m");
-		return str.toString();
+        return BASE_SHORT_OSM_URL + createShortLinkString(latitude, longitude, zoom) + "?m";
 	}
 
-	public static String createShortLocString(double latitude, double longitude, int zoom) {
-		long lat = (long) (((latitude + 90d)/180d)*(1l << 32));
-		long lon = (long) (((longitude + 180d)/360d)*(1l << 32));
+	public static String createShortLinkString(double latitude, double longitude, int zoom) {
+		long lat = (long) (((latitude + 90d)/180d)*(1L << 32));
+		long lon = (long) (((longitude + 180d)/360d)*(1L << 32));
 		long code = interleaveBits(lon, lat);
 		String str = "";
 	    // add eight to the zoom level, which approximates an accuracy of one pixel in a tile.
@@ -294,44 +307,44 @@ public class MapUtils {
 		return str;
 	}
 	
-	@SuppressWarnings("unused")
-	public static LatLon decodeShortLocString(String s) {
+	public static GeoParsedPoint decodeShortLinkString(String s) {
+		// convert old shortlink format to current one
+		s = s.replaceAll("@", "~");
+		int i = 0;
 		long x = 0;
 		long y = 0;
-	    int z = 0;
-		int z_offset = 0;
+		int z = -8;
 
-		for (int i = 0; i < s.length(); i++) {
-			if (s.charAt(i) == '-') {
-				z_offset--;
-				continue;
-			}
+		for (i = 0; i < s.length(); i++) {
+			int digit = -1;
 			char c = s.charAt(i);
-			for (int j = 0; j < intToBase64.length; j++) {
+			for (int j = 0; j < intToBase64.length; j++)
 				if (c == intToBase64[j]) {
-					for (int k = 0; k < 3; k++) {
-						x <<= 1;
-						if ((j & 32) != 0) {
-							x = x | 1;
-						}
-						j <<= 1;
-						y <<= 1;
-						if ((j & 32) != 0) {
-							y = y | 1;
-						}
-						j <<= 1;
-					}
-					z += 3;
+					digit = j;
 					break;
 				}
+			if (digit < 0)
+				break;
+			if (digit < 0)
+				break;
+			// distribute 6 bits into x and y
+			x <<= 3;
+			y <<= 3;
+			for (int j = 2; j >= 0; j--) {
+				x |= ((digit & (1 << (j+j+1))) == 0 ? 0 : (1 << j));
+				y |= ((digit & (1 << (j+j))) == 0 ? 0 : (1 << j));
 			}
+			z += 3;
 		}
-		x <<= (32 - z);
-		y <<= (32 - z);
-//		int zoom = z - 8 - ((3 + z_offset) % 3);
-		double dlat = (180d * (y) / ((double)(1l << 32))) - 90d;
-		double dlon = (360d * (x)/ ((double)(1l << 32))) - 180d;
-		return new LatLon(dlat, dlon);
+		double lon = x * Math.pow(2, 2 - 3 * i) * 90. - 180;
+		double lat = y * Math.pow(2, 2 - 3 * i) * 45. - 90;
+		// adjust z
+		if(i < s.length() && s.charAt(i) == '-') {
+			z -= 2;
+			if(i + 1 < s.length() && s.charAt(i + 1) == '-')
+				z++;
+		}
+		return new GeoParsedPoint(lat, lon, z);
 	}
 	
 	/**	
@@ -368,14 +381,13 @@ public class MapUtils {
 	 * Calculate rotation diff D, that R (rotate) + D = T (targetRotate)
 	 * D is between -180, 180 
 	 * @param rotate
-	 * @param targetRotate
-	 * @return 
+	 * @return
 	 */
 	public static float unifyRotationTo360(float rotate) {
-		while(rotate < 0){
+		while(rotate < -180){
 			rotate += 360;
 		}
-		while(rotate > 360){
+		while(rotate > +180){
 			rotate -= 360;
 		}
 		return rotate;
@@ -397,7 +409,7 @@ public class MapUtils {
 	}
 	
 	/**
-	 * @param diff align difference between 2 angles ]-180, 180] 
+	 * diff align difference between 2 angles ]-180, 180]
 	 * @return 
 	 */
 	public static double degreesDiff(double a1, double a2) {
@@ -413,29 +425,68 @@ public class MapUtils {
 	}	
 
 	
+	public static double convert31YToMeters(double y1, double y2) {
+		// translate into meters 
+		return (y1 - y2) * 0.01863d;
+	}
+	
+	public static double convert31XToMeters(double x1, double x2) {
+		// translate into meters 
+		return (x1 - x2) * 0.011d;
+	}
+   
+	
+	public static QuadPoint getProjectionPoint31(int px, int py, int st31x, int st31y,int end31x, int end31y) {
+		double projection = calculateProjection31TileMetric(st31x, st31y, end31x,
+				end31y, px, py);
+		double mDist = squareRootDist31(end31x, end31y, st31x,
+				st31y);
+		int pry = end31y;
+		int prx = end31x;
+		if (projection < 0) {
+			prx = st31x;
+			pry = st31y;
+		} else if (projection >= mDist * mDist) {
+			prx = end31x;
+			pry = end31y;
+		} else {
+			prx = (int) (st31x + (end31x - st31x)
+					* (projection / (mDist * mDist)));
+			pry = (int) (st31y + (end31y - st31y)
+					* (projection / (mDist * mDist)));
+		}
+		return new QuadPoint(prx, pry);
+	}
+	
+	
+	
+	public static double squareRootDist31(int x1, int y1, int x2, int y2) {
+		// translate into meters 
+		double dy = MapUtils.convert31YToMeters(y1, y2);
+		double dx = MapUtils.convert31XToMeters(x1, x2);
+		return Math.sqrt(dx * dx + dy * dy);
+//		return measuredDist(x1, y1, x2, y2);
+	}
+	
+	public static double measuredDist31(int x1, int y1, int x2, int y2) {
+		return getDistance(MapUtils.get31LatitudeY(y1), MapUtils.get31LongitudeX(x1), MapUtils.get31LatitudeY(y2), MapUtils.get31LongitudeX(x2));
+	}
+	
 	public static double squareDist31TileMetric(int x1, int y1, int x2, int y2) {
 		// translate into meters 
 		double dy = convert31YToMeters(y1, y2);
 		double dx = convert31XToMeters(x1, x2);
 		return dx * dx + dy * dy;
 	}
-	public static double convert31YToMeters(float y1, float y2) {
-		// translate into meters 
-		return (y1 - y2) * 0.01863d;
-	}
-	
-	public static double convert31XToMeters(float x1, float x2) {
-		// translate into meters 
-		return (x1 - x2) * 0.011d;
-	}
-   
 	
 	public static double calculateProjection31TileMetric(int xA, int yA, int xB, int yB, int xC, int yC) {
 		// Scalar multiplication between (AB, AC)
-		double multiple = convert31XToMeters(xB, xA) * convert31XToMeters(xC, xA) + convert31YToMeters(yB, yA) * convert31YToMeters(yC, yA);
+		double multiple = MapUtils.convert31XToMeters(xB, xA) * MapUtils.convert31XToMeters(xC, xA) +
+				MapUtils.convert31YToMeters(yB, yA) * MapUtils.convert31YToMeters(yC, yA);
 		return multiple;
 	}
-	
+
+
 }
 
 

@@ -2,6 +2,7 @@ package net.osmand.osm.edit;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 
 import net.osmand.data.Amenity;
 import net.osmand.data.AmenityType;
@@ -11,13 +12,15 @@ import net.osmand.data.City.CityType;
 import net.osmand.data.LatLon;
 import net.osmand.data.MapObject;
 import net.osmand.data.TransportStop;
+import net.osmand.osm.MapPoiTypes;
 import net.osmand.osm.MapRenderingTypes;
+import net.osmand.osm.PoiCategory;
 import net.osmand.osm.edit.OSMSettings.OSMTagKey;
 import net.osmand.util.Algorithms;
 
 public class EntityParser {
 	
-	private static void parseMapObject(MapObject mo, Entity e) {
+	public static void parseMapObject(MapObject mo, Entity e) {
 		mo.setId(e.getId());
 		if(mo instanceof Amenity) {
 			mo.setId((e.getId() << 1) + ((e instanceof Node) ? 0 : 1));
@@ -62,21 +65,27 @@ public class EntityParser {
 		mo.setName(op);
 	}
 	
-	public static void parseAmenity(Amenity am, Entity entity) {
-		parseMapObject(am, entity);
-		
-	}
-
-	public static Amenity parseAmenity(Entity entity, AmenityType type, String subtype) {
+	public static Amenity parseAmenity(Entity entity, PoiCategory type, String subtype, Map<String, String> tagValues,
+			MapRenderingTypes types) {
 		Amenity am = new Amenity();
-		parseAmenity(am, entity);
+		parseMapObject(am, entity);
+		if(tagValues == null) {
+			tagValues = entity.getTags();
+		}
 		am.setType(type);
 		am.setSubType(subtype);
-		am.setOpeningHours(entity.getTag(OSMTagKey.OPENING_HOURS));
-		am.setPhone(entity.getTag(OSMTagKey.PHONE));
-		if (am.getPhone() == null) {
-			am.setPhone(entity.getTag(OSMTagKey.CONTACT_PHONE));
+		AmenityType at = AmenityType.findOrCreateTypeNoReg(type.getKeyName());
+		am.setAdditionalInfo(types.getAmenityAdditionalInfo(tagValues, at, subtype));
+		String wbs = getWebSiteURL(entity);
+		if(wbs != null) {
+			am.setAdditionalInfo("website", wbs);
 		}
+		return am;
+	}
+
+	
+
+	private static String getWebSiteURL(Entity entity) {
 		String siteUrl = entity.getTag(OSMTagKey.WIKIPEDIA);
 		if (siteUrl != null) {
 			if (!siteUrl.startsWith("http://")) { //$NON-NLS-1$
@@ -99,24 +108,29 @@ public class EntityParser {
 				siteUrl = "http://" + siteUrl;
 			}
 		}
-		am.setSite(siteUrl);
-		am.setDescription(entity.getTag(OSMTagKey.DESCRIPTION));
-		return am;
+		return siteUrl;
 	}
 	
 	public static List<Amenity> parseAmenities(MapRenderingTypes renderingTypes,
-			Entity entity, List<Amenity> amenitiesList){
+			MapPoiTypes poiTypes, Entity entity, List<Amenity> amenitiesList){
+		amenitiesList.clear();
 		// it could be collection of amenities
 		boolean relation = entity instanceof Relation;
-		Collection<String> keySet = entity.getTagKeySet();
-		if (!keySet.isEmpty()) {
-			for (String t : keySet) {
-				AmenityType type = renderingTypes.getAmenityType(t, entity.getTag(t), relation);
-				if (type != null) {
-					String subtype = renderingTypes.getAmenitySubtype(t, entity.getTag(t));
-					Amenity a = parseAmenity(entity, type, subtype);
-					if(checkAmenitiesToAdd(a, amenitiesList) && !"no".equals(subtype)){
-						amenitiesList.add(a);
+		Collection<Map<String, String>> it = renderingTypes.splitTagsIntoDifferentObjects(entity.getTags());
+		for(Map<String, String> tags : it) {
+			if (!tags.isEmpty()) {
+				boolean purerelation = relation && !"multipolygon".equals(tags.get("type"));
+				boolean hasName = !Algorithms.isEmpty(tags.get("name"));
+				for (Map.Entry<String, String> e : tags.entrySet()) {
+					AmenityType type = purerelation ? renderingTypes.getAmenityTypeForRelation(e.getKey(), e.getValue(), hasName)
+							: renderingTypes.getAmenityType(e.getKey(), e.getValue(), hasName );
+					if (type != null) {
+						String subtype = renderingTypes.getAmenitySubtype(e.getKey(), e.getValue());
+						PoiCategory pc = poiTypes.getPoiCategoryByName(type.getCategoryName(), true);
+						Amenity a = parseAmenity(entity, pc, subtype, tags, renderingTypes);
+						if (checkAmenitiesToAdd(a, amenitiesList) && !"no".equals(subtype)) {
+							amenitiesList.add(a);
+						}
 					}
 				}
 			}

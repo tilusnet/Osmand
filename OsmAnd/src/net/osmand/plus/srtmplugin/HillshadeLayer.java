@@ -49,7 +49,10 @@ public class HillshadeLayer extends MapTileLayer {
 			@Override
 			protected Void doInBackground(Void... params) {
 				File tilesDir = app.getAppPath(IndexConstants.TILES_INDEX_DIR);
-				sqliteDb = SQLiteDatabase.openOrCreateDatabase(new File(tilesDir, HILLSHADE_CACHE) , null);
+				// fix http://stackoverflow.com/questions/26937152/workaround-for-nexus-9-sqlite-file-write-operations-on-external-dirs
+				sqliteDb = SQLiteDatabase.openDatabase(new File(tilesDir, HILLSHADE_CACHE).getPath() , 
+						 null, SQLiteDatabase.ENABLE_WRITE_AHEAD_LOGGING
+						    | SQLiteDatabase.CREATE_IF_NECESSARY );
 				if(sqliteDb.getVersion() == 0) {
 					sqliteDb.setVersion(1);
 					sqliteDb.execSQL("CREATE TABLE TILE_SOURCES(filename varchar2(256), date_modified int, left int, right int, top int, bottom int)");
@@ -62,6 +65,11 @@ public class HillshadeLayer extends MapTileLayer {
 				sqliteDb.close();
 				resources = rs;
 				return null;
+			}
+
+			@Override
+			protected void onPostExecute(Void result) {
+				app.getResourceManager().reloadTilesFromFS();
 			}
 
 			private void indexNonCachedResources(Map<String, Long> fileModified, Map<String, SQLiteTileSource> rs) {
@@ -95,7 +103,7 @@ public class HillshadeLayer extends MapTileLayer {
 						String filename = cursor.getString(0);
 						long lastModified = cursor.getLong(1);
 						Long read = fileModified.get(filename);
-						if(rs.containsKey(filename) && read != null && lastModified == read.longValue()) {
+						if(rs.containsKey(filename) && read != null && lastModified == read) {
 							int left = cursor.getInt(2);
 							int right = cursor.getInt(3);
 							int top = cursor.getInt(4);
@@ -105,8 +113,8 @@ public class HillshadeLayer extends MapTileLayer {
 						}
 						
 					} while(cursor.moveToNext());
-					cursor.close();
 				}
+				cursor.close();
 			}
 
 			private Map<String, SQLiteTileSource> readFiles(final OsmandApplication app, File tilesDir, Map<String, Long> fileModified) {
@@ -126,7 +134,7 @@ public class HillshadeLayer extends MapTileLayer {
 			}
 			
 		};
-		task.execute();
+		executeTaskInBackground(task);
 	}
 
 	private SQLiteTileSource createTileSource(MapActivity activity) {
@@ -143,34 +151,37 @@ public class HillshadeLayer extends MapTileLayer {
 			
 			List<String> getTileSource(int x, int y, int zoom) {
 				ArrayList<String> ls = new ArrayList<String>();
-				int z = (zoom- ZOOM_BOUNDARY );
-				if(z > 0){
+				int z = (zoom - ZOOM_BOUNDARY);
+				if (z > 0) {
 					indexedResources.queryInBox(new QuadRect(x >> z, y >> z, (x >> z), (y >> z)), ls);
 				} else {
-					indexedResources.queryInBox(new QuadRect(x << -z, y << -z, (x+1)<<-z, (y+1)<<-z), ls);
+					indexedResources.queryInBox(new QuadRect(x << -z, y << -z, (x + 1) << -z, (y + 1) << -z), ls);
 				}
 				return ls;
 			}
 			
 			@Override
-			public boolean exists(int x, int y, int zoom, boolean exact) {
-				return !getTileSource(x, y, zoom).isEmpty();
-			}
-			
-			@Override
-			public Bitmap getImage(int x, int y, int zoom) {
+			public boolean exists(int x, int y, int zoom) {
 				List<String> ts = getTileSource(x, y, zoom);
 				for (String t : ts) {
 					SQLiteTileSource sqLiteTileSource = resources.get(t);
-					if(sqLiteTileSource.exists(x, y, zoom, false)) {
-						return sqLiteTileSource.getImage(x, y, zoom);
+					if(sqLiteTileSource != null && sqLiteTileSource.exists(x, y, zoom)) {
+						return true;
 					}
 				}
+				return false;
+			}
+			
+			@Override
+			public Bitmap getImage(int x, int y, int zoom, long[] timeHolder) {
+				List<String> ts = getTileSource(x, y, zoom);
 				for (String t : ts) {
 					SQLiteTileSource sqLiteTileSource = resources.get(t);
-					Bitmap img = sqLiteTileSource.getImage(x, y, zoom);
-					if (img != null) {
-						return img;
+					if (sqLiteTileSource != null) {
+						Bitmap bmp = sqLiteTileSource.getImage(x, y, zoom, timeHolder);
+						if (bmp != null) {
+							return sqLiteTileSource.getImage(x, y, zoom, timeHolder);
+						}
 					}
 				}
 				return null;
@@ -188,7 +199,7 @@ public class HillshadeLayer extends MapTileLayer {
 			
 			@Override
 			public int getMaximumZoomSupported() {
-				return 19;
+				return 11;
 			}
 			
 			@Override

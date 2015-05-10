@@ -1,5 +1,8 @@
 package net.osmand;
 
+import net.osmand.render.RenderingRuleProperty;
+import net.osmand.render.RenderingRuleSearchRequest;
+
 
 public class RenderingContext {
 	static enum ShadowRenderingMode {
@@ -15,23 +18,24 @@ public class RenderingContext {
 		}
 	}
 
+	public int renderedState = 0;
 	// FIELDS OF THAT CLASS ARE USED IN C++
 	public boolean interrupted = false;
 	public boolean nightMode = false;
-	public boolean useEnglishNames = false;
+	public String preferredLocale = "";
 	public int defaultColor = 0xf1eee8;
 
 	public RenderingContext() {
 	}
 	
 
-	public float leftX;
-	public float topY;
+	public double leftX;
+	public double topY;
 	public int width;
 	public int height;
 
 	public int zoom;
-	public float tileDivisor;
+	public double tileDivisor;
 	public float rotate;
 
 	// debug purpose
@@ -43,24 +47,29 @@ public class RenderingContext {
 	public int lastRenderedKey = 0;
 
 	// be aware field is using in C++
-	public int shadowRenderingMode = ShadowRenderingMode.BLUR_SHADOW.value;
+	public float screenDensityRatio = 1;
+	public float textScale = 1;
+	public int shadowRenderingMode = ShadowRenderingMode.SOLID_SHADOW.value;
 	public int shadowRenderingColor = 0xff969696;
 	public String renderingDebugInfo;
+	public double polygonMinSizeToDisplay;
 	
 	private float density = 1;
 	
-	public void setDensityValue(boolean highResMode, float mapTextSize, float density) {
-//		boolean highResMode = false;
-//		float mapTextSize = 1;
-		if (highResMode && density > 1) {
-			this.density =  density * mapTextSize;
-		} else {
-			this.density =  mapTextSize;
-		}
+	public void setDensityValue(float density) {
+		this.density =  density ;
 	}
 
 	public float getDensityValue(float val) {
 		return val * density;
+	}
+	
+	public float getComplexValue(RenderingRuleSearchRequest req, RenderingRuleProperty prop, int defVal) {
+		return req.getFloatPropertyValue(prop, 0) * density + req.getIntPropertyValue(prop, defVal);
+	}
+	
+	public float getComplexValue(RenderingRuleSearchRequest req, RenderingRuleProperty prop) {
+		return req.getFloatPropertyValue(prop, 0) * density + req.getIntPropertyValue(prop, 0);
 	}
 	
 	protected byte[] getIconRawData(String data) {

@@ -6,6 +6,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import android.app.Notification;
+import android.app.PendingIntent;
+import android.support.v4.app.NotificationCompat;
+import android.support.v4.app.NotificationManagerCompat;
 import net.osmand.PlatformUtil;
 import net.osmand.plus.OsmandApplication;
 import net.osmand.plus.R;
@@ -16,8 +20,6 @@ import org.apache.commons.logging.Log;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-import alice.tuprolog.Struct;
-import alice.tuprolog.Term;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.AlertDialog.Builder;
@@ -29,9 +31,11 @@ import android.speech.tts.TextToSpeech;
 import android.speech.tts.TextToSpeech.OnInitListener;
 import android.speech.tts.TextToSpeech.OnUtteranceCompletedListener;
 
+
 public class TTSCommandPlayerImpl extends AbstractPrologCommandPlayer {
 	public final static String PEBBLE_ALERT = "PEBBLE_ALERT";
-	private final class IntentStarter implements
+	public final static String WEAR_ALERT = "WEAR_ALERT";
+	private static final class IntentStarter implements
 			DialogInterface.OnClickListener {
 		private final Context ctx;
 		private final String intentAction;
@@ -59,25 +63,24 @@ public class TTSCommandPlayerImpl extends AbstractPrologCommandPlayer {
 	}
 
 	private static final String CONFIG_FILE = "_ttsconfig.p";
-	private static final int[] TTS_VOICE_VERSION = new int[] { 100, 101 }; // !! MUST BE SORTED
+	private static final int[] TTS_VOICE_VERSION = new int[] { 102, 103 }; // !! MUST BE SORTED  
+	// TTS any more 101 because of to much changes
 	private static final Log log = PlatformUtil.getLog(TTSCommandPlayerImpl.class);
 	private TextToSpeech mTts;
 	private Context mTtsContext;
-	private String language;
 	private HashMap<String, String> params = new HashMap<String, String>();
 
 	protected TTSCommandPlayerImpl(Activity ctx, String voiceProvider)
 			throws CommandPlayerException {
 		super((OsmandApplication) ctx.getApplicationContext(), voiceProvider, CONFIG_FILE, TTS_VOICE_VERSION);
-		final Term langVal = solveSimplePredicate("language");
-		if (langVal instanceof Struct) {
-			language = ((Struct) langVal).getName();
-		}
 		if (Algorithms.isEmpty(language)) {
 			throw new CommandPlayerException(
 					ctx.getString(R.string.voice_data_corrupted));
 		}
 		OsmandApplication app = (OsmandApplication) ctx.getApplicationContext();
+		if(app.accessibilityEnabled()) {
+			cSpeechRate = app.getSettings().SPEECH_RATE.get();
+		}
 		initializeEngine(app, ctx);
 		params.put(TextToSpeech.Engine.KEY_PARAM_STREAM, app.getSettings().AUDIO_STREAM_GUIDANCE.get().toString());
 	}
@@ -92,6 +95,7 @@ public class TTSCommandPlayerImpl extends AbstractPrologCommandPlayer {
 	 * optimize use of requesting and abandoning audio focus.
 	 */
 	private int ttsRequests;
+	private float cSpeechRate = 1;
 	
 	// Called from the calculating route thread.
 	@Override
@@ -113,6 +117,13 @@ public class TTSCommandPlayerImpl extends AbstractPrologCommandPlayer {
 		}
 	}
 
+	@Override
+	public void stop(){
+		if (mTts != null){
+			mTts.stop();
+		}
+	}
+
 	public void sendAlertToPebble(String message) {
 	    final Intent i = new Intent("com.getpebble.action.SEND_NOTIFICATION");
 	    final Map<String, Object> data = new HashMap<String, Object>();
@@ -127,6 +138,22 @@ public class TTSCommandPlayerImpl extends AbstractPrologCommandPlayer {
 	    log.info("Send message to pebble " + message);
 	}
 
+	public void sendAlertToAndroidWear(String message) {
+		int notificationId = 1;
+		NotificationCompat.Builder notificationBuilder =
+				new NotificationCompat.Builder(mTtsContext)
+						.setSmallIcon(R.drawable.icon)
+						.setContentTitle(mTtsContext.getString(R.string.app_name))
+						.setContentText(message)
+						.setGroup(WEAR_ALERT);
+
+		// Get an instance of the NotificationManager service
+		NotificationManagerCompat notificationManager =
+				NotificationManagerCompat.from(mTtsContext);
+		// Build the notification and issues it with notification manager.
+		notificationManager.notify(notificationId, notificationBuilder.build());
+	}
+
 	private void initializeEngine(final Context ctx, final Activity act)
 	{
 		if (mTts != null && mTtsContext != ctx) {
@@ -134,6 +161,7 @@ public class TTSCommandPlayerImpl extends AbstractPrologCommandPlayer {
 		}
 		if (mTts == null) {
 			mTtsContext = ctx;
+			final float speechRate = cSpeechRate; 
 			mTts = new TextToSpeech(ctx, new OnInitListener() {
 				@Override
 				public void onInit(int status) {
@@ -155,7 +183,12 @@ public class TTSCommandPlayerImpl extends AbstractPrologCommandPlayer {
 								}
 								break;
 							case TextToSpeech.LANG_AVAILABLE:
+							case TextToSpeech.LANG_COUNTRY_AVAILABLE:
+							case TextToSpeech.LANG_COUNTRY_VAR_AVAILABLE:
 								mTts.setLanguage(new Locale(language));
+								if(speechRate != 1) {
+									mTts.setSpeechRate(speechRate); 
+								}
 								break;
 							case TextToSpeech.LANG_NOT_SUPPORTED:
 								//maybe weird, but I didn't want to introduce parameter in around 5 methods just to do
@@ -196,8 +229,8 @@ public class TTSCommandPlayerImpl extends AbstractPrologCommandPlayer {
 			IntentStarter intentStarter, final Activity ctx) {
 		Builder builder = new AlertDialog.Builder(ctx);
 		builder.setCancelable(true);
-		builder.setNegativeButton(R.string.default_buttons_no, null);
-		builder.setPositiveButton(R.string.default_buttons_yes, intentStarter);
+		builder.setNegativeButton(R.string.shared_string_no, null);
+		builder.setPositiveButton(R.string.shared_string_yes, intentStarter);
 		builder.setTitle(titleResID);
 		builder.setMessage(messageResID);
 		return builder;
@@ -226,6 +259,11 @@ public class TTSCommandPlayerImpl extends AbstractPrologCommandPlayer {
 	public void updateAudioStream(int streamType) {
 		super.updateAudioStream(streamType);
 		params.put(TextToSpeech.Engine.KEY_PARAM_STREAM, streamType+"");		
+	}
+
+	@Override
+	public boolean supportsStructuredStreetNames() {
+		return getCurrentVersion() >= 103;
 	}
 
 }

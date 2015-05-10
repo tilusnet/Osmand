@@ -1,25 +1,24 @@
 package net.osmand.plus.activities.search;
 
 import java.io.InputStream;
-import java.net.URL;
 import java.net.URLConnection;
 import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-import net.londatiga.android.QuickAction;
 import net.osmand.PlatformUtil;
 import net.osmand.access.AccessibleToast;
 import net.osmand.data.LatLon;
-import net.osmand.plus.ClientContext;
+import net.osmand.data.PointDescription;
+import net.osmand.osm.io.NetworkUtils;
 import net.osmand.plus.OsmAndFormatter;
 import net.osmand.plus.OsmandApplication;
 import net.osmand.plus.OsmandSettings;
 import net.osmand.plus.R;
 import net.osmand.plus.Version;
-import net.osmand.plus.activities.MapActivityActions;
 import net.osmand.plus.activities.search.SearchActivity.SearchActivityChild;
+import net.osmand.plus.dialogs.DirectionsDialogs;
 import net.osmand.util.Algorithms;
 import net.osmand.util.MapUtils;
 
@@ -30,8 +29,15 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.AsyncTask;
 import android.os.Bundle;
+import android.support.v4.app.Fragment;
+import android.support.v4.view.MenuItemCompat;
+import android.support.v7.widget.PopupMenu;
 import android.util.Xml;
 import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
+import android.view.MenuItem.OnMenuItemClickListener;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.InputMethodManager;
@@ -44,13 +50,7 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.actionbarsherlock.app.SherlockFragment;
-import com.actionbarsherlock.view.Menu;
-import com.actionbarsherlock.view.MenuInflater;
-import com.actionbarsherlock.view.MenuItem;
-import com.actionbarsherlock.view.MenuItem.OnMenuItemClickListener;
-
-public class SearchAddressOnlineFragment extends SherlockFragment implements SearchActivityChild, OnItemClickListener {
+public class SearchAddressOnlineFragment extends Fragment implements SearchActivityChild, OnItemClickListener {
 	
 	private LatLon location;
 	private final static Log log = PlatformUtil.getLog(SearchAddressOnlineFragment.class);
@@ -62,33 +62,34 @@ public class SearchAddressOnlineFragment extends SherlockFragment implements Sea
 	
 	
 	@Override
-	public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
-		MenuItem menuItem;
-		boolean light = ((OsmandApplication) getActivity().getApplication()).getSettings().isLightActionBar();
-		menuItem = menu.add(0, 1, 0, R.string.search_offline_clear_search).setShowAsActionFlags(MenuItem.SHOW_AS_ACTION_ALWAYS | MenuItem.SHOW_AS_ACTION_WITH_TEXT );
-		menuItem = menuItem.setIcon(light ? R.drawable.ic_action_gremove_light : R.drawable.ic_action_gremove_dark);
-
+	public void onCreateOptionsMenu(Menu onCreate, MenuInflater inflater) {
+		Menu menu = onCreate;
+		if(getActivity() instanceof SearchActivity) {
+			menu = ((SearchActivity) getActivity()).getClearToolbar(true).getMenu();
+		}
+		MenuItem menuItem = menu.add(0, 1, 0, R.string.search_offline_clear_search);
+		MenuItemCompat.setShowAsAction(menuItem, MenuItemCompat.SHOW_AS_ACTION_ALWAYS | MenuItemCompat.SHOW_AS_ACTION_WITH_TEXT);
+		menuItem = menuItem.setIcon(R.drawable.ic_action_gremove_dark);
 		menuItem.setOnMenuItemClickListener(new OnMenuItemClickListener() {
 			@Override
-			public boolean onMenuItemClick(com.actionbarsherlock.view.MenuItem item) {
+			public boolean onMenuItemClick(MenuItem item) {
 				searchText.setText("");
 				adapter.clear();
 				return true;
 			}
 		});
 		if (getActivity() instanceof SearchActivity) {
-			menuItem = menu.add(0, 0, 0, R.string.search_offline_address).setShowAsActionFlags(
-					MenuItem.SHOW_AS_ACTION_ALWAYS | MenuItem.SHOW_AS_ACTION_WITH_TEXT);
-			menuItem = menuItem.setIcon(light ? R.drawable.ic_action_gnext_light : R.drawable.ic_action_gnext_dark);
+			menuItem = menu.add(0, 0, 0, R.string.search_offline_address);
+			MenuItemCompat.setShowAsAction(menuItem, MenuItemCompat.SHOW_AS_ACTION_ALWAYS | MenuItemCompat.SHOW_AS_ACTION_WITH_TEXT);
+			menuItem = menuItem.setIcon(R.drawable.ic_sdcard);
 			menuItem.setOnMenuItemClickListener(new OnMenuItemClickListener() {
 				@Override
-				public boolean onMenuItemClick(com.actionbarsherlock.view.MenuItem item) {
+				public boolean onMenuItemClick(MenuItem item) {
 					((SearchActivity) getActivity()).startSearchAddressOffline();
 					return true;
 				}
 			});
 		}
-		
 	}
 	
 	public View onCreateView(android.view.LayoutInflater inflater, android.view.ViewGroup container, Bundle savedInstanceState) {
@@ -123,7 +124,7 @@ public class SearchAddressOnlineFragment extends SherlockFragment implements Sea
 			double lat = intent.getDoubleExtra(SearchActivity.SEARCH_LAT, 0);
 			double lon = intent.getDoubleExtra(SearchActivity.SEARCH_LON, 0);
 			if(lat != 0 || lon != 0){
-				location = new LatLon(lat, lon);
+				adapter.location = new LatLon(lat, lon);
 			}
 		}
 		if (location == null && getActivity() instanceof SearchActivity) {
@@ -132,17 +133,19 @@ public class SearchAddressOnlineFragment extends SherlockFragment implements Sea
 		if (location == null) {
 			location = settings.getLastKnownMapLocation();
 		}
+		locationUpdate(location);
 	}
 	
 	@Override
 	public void locationUpdate(LatLon l) {
 		location = l;
 		if(adapter != null){
-			adapter.notifyDataSetInvalidated();
+			adapter.updateLocation(l);
 		}
 	}
 
 	protected void searchPlaces(final String search) {
+		
 		if(Algorithms.isEmpty(search)){
 			return;
 		}
@@ -155,17 +158,28 @@ public class SearchAddressOnlineFragment extends SherlockFragment implements Sea
 			@Override
 			protected Void doInBackground(Void... params) {
 				try {
+					
+					final int deviceApiVersion = android.os.Build.VERSION.SDK_INT;
+
+					String NOMINATIM_API;
+				
+					if (deviceApiVersion >= android.os.Build.VERSION_CODES.GINGERBREAD) {
+						NOMINATIM_API = "https://nominatim.openstreetmap.org/search";
+					}
+					else {
+						NOMINATIM_API = "http://nominatim.openstreetmap.org/search";
+					}
+					
 					final List<Place> places = new ArrayList<Place>();
 					StringBuilder b = new StringBuilder();
-					b.append("http://nominatim.openstreetmap.org/search"); //$NON-NLS-1$
+					b.append(NOMINATIM_API); //$NON-NLS-1$
 					b.append("?format=xml&addressdetails=0&accept-language=").append(Locale.getDefault().getLanguage()); //$NON-NLS-1$
 					b.append("&q=").append(URLEncoder.encode(search, "UTF-8")); //$NON-NLS-1$
 					
-					log.info("Searching address at : " + b.toString()); //$NON-NLS-1$
-					URL url = new URL(b.toString());
-					URLConnection conn = url.openConnection();
+					log.info("Searching address at : " + b); //$NON-NLS-1$
+					URLConnection conn = NetworkUtils.getHttpURLConnection(b.toString());
 					conn.setDoInput(true);
-					conn.setRequestProperty("User-Agent", Version.getFullVersion((ClientContext) getActivity().getApplication())); //$NON-NLS-1$
+					conn.setRequestProperty("User-Agent", Version.getFullVersion((OsmandApplication) getActivity().getApplication())); //$NON-NLS-1$
 					conn.connect();
 					InputStream is = conn.getInputStream();
 					XmlPullParser parser = Xml.newPullParser();
@@ -197,7 +211,7 @@ public class SearchAddressOnlineFragment extends SherlockFragment implements Sea
 					}
 				} catch(Exception e){
 					log.error("Error searching address", e); //$NON-NLS-1$
-					warning = getString(R.string.error_io_error) + " : " + e.getMessage();
+					warning = getString(R.string.shared_string_io_error) + " : " + e.getMessage();
 				}
 				return null;
 			}
@@ -216,11 +230,11 @@ public class SearchAddressOnlineFragment extends SherlockFragment implements Sea
 	@Override
 	public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
 		Place item = adapter.getItem(position);
-		QuickAction qa = new QuickAction(view);
-		MapActivityActions.createDirectionsActions(qa, new LatLon(item.lat, item.lon), item, 
-				getString(R.string.address)+ " : " + item.displayName, Math.max(15, settings.getLastKnownMapZoom()), 
-				getActivity(), true, null);
-		qa.show();		
+		final PopupMenu optionsMenu = new PopupMenu(getActivity(), view);
+		DirectionsDialogs.createDirectionsActionsPopUpMenu(optionsMenu, new LatLon(item.lat, item.lon), item,
+				new PointDescription(PointDescription.POINT_TYPE_ADDRESS, item.displayName), Math.max(15, settings.getLastKnownMapZoom()),
+				getActivity(), true);
+		optionsMenu.show();
 	}
 	
 	private static class Place {
@@ -230,6 +244,12 @@ public class SearchAddressOnlineFragment extends SherlockFragment implements Sea
 	}
 	
 	class PlacesAdapter extends ArrayAdapter<Place> {
+		private LatLon location;
+
+		public void updateLocation(LatLon l) {
+			location = l;
+			notifyDataSetChanged();
+		}
 
 		public PlacesAdapter(List<Place> places) {
 			super(getActivity(), R.layout.search_address_online_list_item, places);
@@ -258,7 +278,7 @@ public class SearchAddressOnlineFragment extends SherlockFragment implements Sea
 			TextView distanceLabel = (TextView) row.findViewById(R.id.distance_label);
 			if(location != null){
 				int dist = (int) (MapUtils.getDistance(location, model.lat, model.lon));
-				distanceLabel.setText(OsmAndFormatter.getFormattedDistance(dist, (ClientContext) getActivity().getApplication()));
+				distanceLabel.setText(OsmAndFormatter.getFormattedDistance(dist, (OsmandApplication) getActivity().getApplication()));
 			} else {
 				distanceLabel.setText(""); //$NON-NLS-1$
 			}

@@ -2,6 +2,7 @@ package net.osmand.map;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -18,6 +19,8 @@ import java.util.List;
 import java.util.Map;
 
 import net.osmand.PlatformUtil;
+import net.osmand.osm.io.NetworkUtils;
+import net.osmand.util.Algorithms;
 
 import org.apache.commons.logging.Log;
 import org.xmlpull.v1.XmlPullParser;
@@ -28,11 +31,11 @@ import bsh.Interpreter;
 
 public class TileSourceManager {
 	private static final Log log = PlatformUtil.getLog(TileSourceManager.class);
-	private static final String RULE_BEANSHELL = "beanshell";
+	public static final String RULE_BEANSHELL = "beanshell";
 	public static final String RULE_YANDEX_TRAFFIC = "yandex_traffic";
 	private static final String RULE_WMS = "wms_tile";
 
-	public static class TileSourceTemplate implements ITileSource {
+	public static class TileSourceTemplate implements ITileSource, Cloneable {
 		private int maxZoom;
 		private int minZoom;
 		private String name;
@@ -41,8 +44,11 @@ public class TileSourceManager {
 		protected String ext;
 		private int avgSize;
 		private int bitDensity;
+		// -1 never expires, 
+		private int expirationTimeMillis = -1;
 		private boolean ellipticYTile;
 		private String rule;
+		
 		private boolean isRuleAcceptable = true;
 
 		public TileSourceTemplate(String name, String urlToLoad, String ext, int maxZoom, int minZoom, int tileSize, int bitDensity,
@@ -55,6 +61,27 @@ public class TileSourceManager {
 			this.ext = ext;
 			this.avgSize = avgSize;
 			this.bitDensity = bitDensity;
+		}
+		
+		public static String normalizeUrl(String url){
+			if(url != null){
+				url = url.replaceAll("\\{\\$z\\}", "{0}"); //$NON-NLS-1$ //$NON-NLS-2$
+				url = url.replaceAll("\\{\\$x\\}", "{1}"); //$NON-NLS-1$//$NON-NLS-2$
+				url = url.replaceAll("\\{\\$y\\}", "{2}"); //$NON-NLS-1$ //$NON-NLS-2$
+			}
+			return url;
+		}
+		public void setMinZoom(int minZoom) {
+			this.minZoom = minZoom;
+		}
+		
+		public void setMaxZoom(int maxZoom) {
+			this.maxZoom = maxZoom;
+		}
+		
+		
+		public void setName(String name) {
+			this.name = name;
 		}
 
 		public void setEllipticYTile(boolean ellipticYTile) {
@@ -89,6 +116,30 @@ public class TileSourceManager {
 		public String getName() {
 			return name;
 		}
+		
+		public void setExpirationTimeMillis(int timeMillis) {
+			this.expirationTimeMillis = timeMillis;
+		}
+		
+		public void setExpirationTimeMinutes(int minutes) {
+			if(minutes < 0) {
+				this.expirationTimeMillis = -1;
+			} else {
+				this.expirationTimeMillis = minutes * 60 * 1000;
+			}
+		}
+		
+		public int getExpirationTimeMinutes() {
+			if(expirationTimeMillis < 0) {
+				return -1;
+			}
+			return expirationTimeMillis / (60  * 1000);
+		}
+		
+		public int getExpirationTimeMillis() {
+			return expirationTimeMillis;
+		}
+		
 
 		@Override
 		public int getTileSize() {
@@ -100,12 +151,28 @@ public class TileSourceManager {
 			return ext;
 		}
 		
+		public void setTileFormat(String ext) {
+			this.ext = ext;
+		}
+		
+		public void setUrlToLoad(String urlToLoad) {
+			this.urlToLoad = urlToLoad;
+		}
+		
 		public boolean isRuleAcceptable() {
 			return isRuleAcceptable;
 		}
 		
 		public void setRuleAcceptable(boolean isRuleAcceptable) {
 			this.isRuleAcceptable = isRuleAcceptable;
+		}
+		
+		public TileSourceTemplate copy() {
+			try {
+				return (TileSourceTemplate) this.clone();
+			} catch (CloneNotSupportedException e) {
+				return this;
+			}
 		}
 
 		@Override
@@ -126,7 +193,7 @@ public class TileSourceManager {
 			return urlToLoad != null;
 		}
 		
-
+		
 		@Override
 		public int hashCode() {
 			final int prime = 31;
@@ -158,6 +225,27 @@ public class TileSourceManager {
 
 		public String getRule() {
 			return rule;
+		}
+		
+		public String calculateTileId(int x, int y, int zoom) {
+			StringBuilder builder = new StringBuilder(getName());
+			builder.append('/');
+			builder.append(zoom).append('/').append(x).append('/').append(y).append(getTileFormat()).append(".tile"); //$NON-NLS-1$ //$NON-NLS-2$
+			return builder.toString();
+		}
+		
+		@Override
+		public byte[] getBytes(int x, int y, int zoom, String dirWithTiles) throws IOException {
+			File f = new File(dirWithTiles, calculateTileId(x, y, zoom));
+			if (!f.exists())
+				return null;
+			
+			ByteArrayOutputStream bous = new ByteArrayOutputStream();
+			FileInputStream fis = new FileInputStream(f);
+			Algorithms.streamCopy(fis, bous);
+			fis.close();
+			bous.close();
+			return bous.toByteArray();
 		}
 	}
 	
@@ -203,13 +291,12 @@ public class TileSourceManager {
 	public static void createMetaInfoFile(File dir, TileSourceTemplate tm, boolean override) throws IOException {
 		File metainfo = new File(dir, ".metainfo"); //$NON-NLS-1$
 		Map<String, String> properties = new LinkedHashMap<String, String>();
-		if (tm instanceof BeanShellTileSourceTemplate) {
-			properties.put("rule", RULE_BEANSHELL);
+		if (tm.getRule() != null && tm.getRule().length() > 0) {
+			properties.put("rule", tm.getRule());
 		}
-		if (tm.getUrlTemplate() == null) {
-			return;
+		if(tm.getUrlTemplate() != null) {
+			properties.put("url_template", tm.getUrlTemplate());
 		}
-		properties.put("url_template", tm.getUrlTemplate());
 
 		properties.put("ext", tm.getTileFormat());
 		properties.put("min_zoom", tm.getMinimumZoomSupported() + "");
@@ -221,11 +308,16 @@ public class TileSourceManager {
 		if (tm.isEllipticYTile()) {
 			properties.put("ellipsoid", tm.isEllipticYTile() + "");
 		}
-		BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(metainfo)));
-		for (String key : properties.keySet()) {
-			writer.write("[" + key + "]\n" + properties.get(key) + "\n");
+		if (tm.getExpirationTimeMinutes() != -1) {
+			properties.put("expiration_time_minutes", tm.getExpirationTimeMinutes() + "");
 		}
-		writer.close();
+		if (override || !metainfo.exists()) {
+			BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(metainfo)));
+			for (String key : properties.keySet()) {
+				writer.write("[" + key + "]\n" + properties.get(key) + "\n");
+			}
+			writer.close();
+		}
 	}
 	
 	public static boolean isTileSourceMetaInfoExist(File dir){
@@ -260,9 +352,10 @@ public class TileSourceManager {
 							new FileInputStream(readUrl), "UTF-8")); //$NON-NLS-1$
 					url = reader.readLine();
 					// 
-					url = url.replaceAll("\\{\\$z\\}", "{0}"); //$NON-NLS-1$ //$NON-NLS-2$
-					url = url.replaceAll("\\{\\$x\\}", "{1}"); //$NON-NLS-1$//$NON-NLS-2$
-					url = url.replaceAll("\\{\\$y\\}", "{2}"); //$NON-NLS-1$ //$NON-NLS-2$
+					//url = url.replaceAll("\\{\\$z\\}", "{0}"); //$NON-NLS-1$ //$NON-NLS-2$
+					//url = url.replaceAll("\\{\\$x\\}", "{1}"); //$NON-NLS-1$//$NON-NLS-2$
+					//url = url.replaceAll("\\{\\$y\\}", "{2}"); //$NON-NLS-1$ //$NON-NLS-2$
+					url = TileSourceTemplate.normalizeUrl(url);
 					reader.close();
 				}
 			} catch (IOException e) {
@@ -287,7 +380,7 @@ public class TileSourceManager {
 					String fileName = file.getName();
 					if (fileName.endsWith(".tile")) {
 						String substring = fileName.substring(0, fileName.length() - ".tile".length());
-						int extInt = substring.lastIndexOf(".");
+						int extInt = substring.lastIndexOf('.');
 						if (extInt != -1) {
 							return substring.substring(extInt, substring.length());
 						}
@@ -307,7 +400,7 @@ public class TileSourceManager {
 	}
 
 	public static TileSourceTemplate getMapnikSource(){
-		return new TileSourceTemplate("Mapnik", "http://mapnik.osmand.net/{0}/{1}/{2}.png", ".png", 18, 1, 256, 8, 18000);  //$NON-NLS-1$//$NON-NLS-2$ //$NON-NLS-3$
+		return new TileSourceTemplate("OsmAnd (online tiles)", "http://tile.osmand.net/hd/{0}/{1}/{2}.png", ".png", 19, 1, 512, 8, 18000);  //$NON-NLS-1$//$NON-NLS-2$ //$NON-NLS-3$
 	}
 
 	public static TileSourceTemplate getCycleMapSource(){
@@ -318,7 +411,7 @@ public class TileSourceManager {
 	public static List<TileSourceTemplate> downloadTileSourceTemplates(String versionAsUrl) {
 		final List<TileSourceTemplate> templates = new ArrayList<TileSourceTemplate>();
 		try {
-			URLConnection connection = new URL("http://download.osmand.net//tile_sources.php?" + versionAsUrl).openConnection();
+			URLConnection connection = NetworkUtils.getHttpURLConnection("http://download.osmand.net//tile_sources.php?" + versionAsUrl);
 			XmlPullParser parser = PlatformUtil.newXMLPullParser();
 			parser.setInput(connection.getInputStream(), "UTF-8");
 			int tok;
@@ -395,12 +488,16 @@ public class TileSourceManager {
 		if (name == null || (urlTemplate == null && !ignoreTemplate)) {
 			return null;
 		}
-		if(urlTemplate != null){
-			urlTemplate.replace("${x}", "{1}").replace("${y}", "{2}").replace("${z}", "{0}");
-		}
+		//As I see, here is no changes to urlTemplate  
+		//if(urlTemplate != null){
+			//urlTemplate.replace("${x}", "{1}").replace("${y}", "{2}").replace("${z}", "{0}");
+		//}
+		urlTemplate = TileSourceTemplate.normalizeUrl(urlTemplate);
+
 		int maxZoom = parseInt(attributes, "max_zoom", 18);
 		int minZoom = parseInt(attributes, "min_zoom", 5);
 		int tileSize = parseInt(attributes, "tile_size", 256);
+		int expirationTime = parseInt(attributes, "expiration_time_minutes", -1);
 		String ext = attributes.get("ext") == null ? ".jpg" : attributes.get("ext");
 		int bitDensity = parseInt(attributes, "img_density", 16);
 		int avgTileSize = parseInt(attributes, "avg_img_size", 18000);
@@ -409,6 +506,9 @@ public class TileSourceManager {
 			ellipsoid = true;
 		}
 		TileSourceTemplate templ = new TileSourceTemplate(name, urlTemplate, ext, maxZoom, minZoom, tileSize, bitDensity, avgTileSize);
+		if(expirationTime >= 0) {
+			templ.setExpirationTimeMinutes(expirationTime);
+		}
 		templ.setEllipticYTile(ellipsoid);
 		return templ;
 	}
@@ -425,6 +525,7 @@ public class TileSourceManager {
 		String ext = attributes.get("ext") == null ? ".jpg" : attributes.get("ext");
 		int bitDensity = parseInt(attributes, "img_density", 16);
 		int avgTileSize = parseInt(attributes, "avg_img_size", 18000);
+		int expirationTime = parseInt(attributes, "expiration_time_minutes", -1);
 		boolean ellipsoid = false;
 		if (Boolean.parseBoolean(attributes.get("ellipsoid"))) {
 			ellipsoid = true;
@@ -432,6 +533,9 @@ public class TileSourceManager {
 		TileSourceTemplate templ;
 		templ = new BeanShellTileSourceTemplate(name, urlTemplate, ext, maxZoom, minZoom, tileSize, bitDensity, avgTileSize);
 		templ.setEllipticYTile(ellipsoid);
+		if(expirationTime > 0) {
+			templ.setExpirationTimeMinutes(expirationTime);
+		}
 		return templ;
 	}
 	

@@ -1,10 +1,14 @@
 package net.osmand.plus.routing;
 
+import net.osmand.plus.OsmAndFormatter;
+import net.osmand.plus.OsmandApplication;
 import net.osmand.router.TurnType;
 
 public class RouteDirectionInfo {
 	// location when you should action (turn or go ahead)
 	public int routePointOffset;
+	// location where direction end. useful for roundabouts.
+	public int routeEndPointOffset = 0;
 	// Type of action to take
 	private TurnType turnType;
 	// Description of the turn and route after
@@ -32,7 +36,11 @@ public class RouteDirectionInfo {
 		this.turnType = turnType;
 	}
 	
-	public String getDescriptionRoute() {
+	public String getDescriptionRoute(OsmandApplication ctx) {
+		return descriptionRoute + " " + OsmAndFormatter.getFormattedDistance(distance, ctx);
+	}
+	
+	public String getDescriptionRoutePart() {
 		return descriptionRoute;
 	}
 

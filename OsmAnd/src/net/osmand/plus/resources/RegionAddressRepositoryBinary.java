@@ -12,6 +12,7 @@ import java.util.TreeMap;
 import net.osmand.Collator;
 import net.osmand.CollatorStringMatcher;
 import net.osmand.CollatorStringMatcher.StringMatcherMode;
+import net.osmand.OsmAndCollator;
 import net.osmand.PlatformUtil;
 import net.osmand.ResultMatcher;
 import net.osmand.binary.BinaryMapAddressReaderAdapter;
@@ -21,7 +22,10 @@ import net.osmand.data.Building;
 import net.osmand.data.City;
 import net.osmand.data.LatLon;
 import net.osmand.data.MapObject;
+import net.osmand.data.QuadRect;
+import net.osmand.data.QuadTree;
 import net.osmand.data.Street;
+import net.osmand.util.MapUtils;
 
 import org.apache.commons.logging.Log;
 
@@ -32,7 +36,10 @@ public class RegionAddressRepositoryBinary implements RegionAddressRepository {
 	private String region;
 	
 	
-	private final LinkedHashMap<Long, City> cities = new LinkedHashMap<Long, City>();
+	private LinkedHashMap<Long, City> cities = new LinkedHashMap<Long, City>();
+	private int ZOOM_QTREE = 10;
+	private QuadTree<City> citiesQtree = new QuadTree<City>(new QuadRect(0, 0, 1 << (ZOOM_QTREE + 1),
+			1 << (ZOOM_QTREE + 1)), 8, 0.55f);
 	private final Map<String, City> postCodes;
 	private boolean useEnglishNames = false;
 	private final Collator collator;
@@ -40,8 +47,8 @@ public class RegionAddressRepositoryBinary implements RegionAddressRepository {
 	public RegionAddressRepositoryBinary(BinaryMapIndexReader file, String name) {
 		this.file = file;
 		this.region = name;
- 	    this.collator = PlatformUtil.primaryCollator();
-		this.postCodes = new TreeMap<String, City>(PlatformUtil.primaryCollator());
+ 	    this.collator = OsmAndCollator.primaryCollator();
+		this.postCodes = new TreeMap<String, City>(OsmAndCollator.primaryCollator());
 	}
 	
 	@Override
@@ -56,18 +63,53 @@ public class RegionAddressRepositoryBinary implements RegionAddressRepository {
 			try {
 				List<City> cs = file.getCities(region, BinaryMapIndexReader.buildAddressRequest(resultMatcher), 
 						BinaryMapAddressReaderAdapter.CITY_TOWN_TYPE);
+				LinkedHashMap<Long, City> ncities = new LinkedHashMap<Long, City>();
 				for (City c : cs) {
-					cities.put(c.getId(), c);
+					ncities.put(c.getId(), c);
+					LatLon loc = c.getLocation();
+					if(loc != null) {
+						int y31 = MapUtils.get31TileNumberY(loc.getLatitude());
+						int x31 = MapUtils.get31TileNumberX(loc.getLongitude());
+						int dz = (31 - ZOOM_QTREE);
+						citiesQtree.insert(c, new QuadRect((x31 >> dz) - 1, (y31 >> dz) - 1, (x31 >> dz) + 1, (y31 >> dz) + 1));
+					}
 				}
+				cities = ncities;
 			} catch (IOException e) {
 				log.error("Disk operation failed", e); //$NON-NLS-1$
 			}
 		}
 	}
+	
+	public City getClosestCity(LatLon l, List<City> cache) {
+		City closest = null;
+		if (l != null) {
+			int y31 = MapUtils.get31TileNumberY(l.getLatitude());
+			int x31 = MapUtils.get31TileNumberX(l.getLongitude());
+			int dz = (31 - ZOOM_QTREE);
+			if (cache == null) {
+				cache = new ArrayList<City>();
+			}
+			cache.clear();
+			citiesQtree.queryInBox(new QuadRect((x31 >> dz) - 1, (y31 >> dz) - 1, (x31 >> dz) + 1, (y31 >> dz) + 1),
+					cache);
+			int min = -1;
+
+			for (City c : cache) {
+				double d = MapUtils.getDistance(l, c.getLocation());
+				if (min == -1 || d < min) {
+					min = (int) d;
+					closest = c;
+				}
+			}
+		}
+		return closest;
+
+	}
 
 	@Override
 	public synchronized void preloadBuildings(Street street, ResultMatcher<Building> resultMatcher) {
-		if(street.getBuildings().isEmpty()){
+		if(street.getBuildings().isEmpty() && street.getIntersectedStreets().isEmpty()){
 			try {
 				file.preloadBuildings(street, BinaryMapIndexReader.buildAddressRequest(resultMatcher));
 				street.sortBuildings();
@@ -78,12 +120,16 @@ public class RegionAddressRepositoryBinary implements RegionAddressRepository {
 	}
 	
 	@Override
-	public synchronized void addCityToPreloadedList(City city) {
-		cities.put(city.getId(), city);
+	public void addCityToPreloadedList(City city) {
+		if (!cities.containsKey(city.getId())) {
+			LinkedHashMap<Long, City> ncities = new LinkedHashMap<Long, City>(cities);
+			ncities.put(city.getId(), city);
+			cities = ncities;
+		}
 	}
 	
 	@Override
-	public synchronized List<City> getLoadedCities(){
+	public List<City> getLoadedCities(){
 		return new ArrayList<City>(cities.values());
 	}
 	
@@ -98,7 +144,6 @@ public class RegionAddressRepositoryBinary implements RegionAddressRepository {
 		} catch (IOException e) {
 			log.error("Disk operation failed" , e); //$NON-NLS-1$
 		}
-		
 	}
 
 //	// not use ccontains It is really slow, takes about 10 times more than other steps
@@ -106,7 +151,7 @@ public class RegionAddressRepositoryBinary implements RegionAddressRepository {
 //			StringMatcherMode.CHECK_STARTS_FROM_SPACE_NOT_BEGINNING};
 	
 	@Override
-	public List<MapObject> searchMapObjectsByName(String name, ResultMatcher<MapObject> resultMatcher) {
+	public synchronized List<MapObject> searchMapObjectsByName(String name, ResultMatcher<MapObject> resultMatcher) {
 		SearchRequest<MapObject> req = BinaryMapIndexReader.buildAddressByNameRequest(resultMatcher, name);
 		try {
 			file.searchAddressDataByName(req);
@@ -118,7 +163,7 @@ public class RegionAddressRepositoryBinary implements RegionAddressRepository {
 
 
 	@Override
-	public List<City> fillWithSuggestedCities(String name, ResultMatcher<City> resultMatcher, boolean searchVillages, LatLon currentLocation) {
+	public synchronized List<City> fillWithSuggestedCities(String name, final ResultMatcher<City> resultMatcher, boolean searchVillages, LatLon currentLocation) {
 		List<City> citiesToFill = new ArrayList<City>();
 		if (cities.isEmpty()) {
 			preloadCities(resultMatcher);
@@ -162,9 +207,26 @@ public class RegionAddressRepositoryBinary implements RegionAddressRepository {
 
 			int initialsize = citiesToFill.size();
 			if (/*name.length() >= 3 && */searchVillages) {
-				List<City> foundCities = file.getCities(region, BinaryMapIndexReader.buildAddressRequest(resultMatcher),
+				
+				List<City> foundCities = file.getCities(region, BinaryMapIndexReader.buildAddressRequest(new ResultMatcher<City>() {
+					List<City> cache = new ArrayList<City>();
+					@Override
+					public boolean publish(City c) {
+						if(c.getLocation() != null) {
+							City ct = getClosestCity(c.getLocation(), cache);
+							c.setClosestCity(ct);
+						}
+						return resultMatcher.publish(c);
+					}
+
+					@Override
+					public boolean isCancelled() {
+						return resultMatcher.isCancelled();
+					}
+				}),
 						new CollatorStringMatcher(name,StringMatcherMode.CHECK_STARTS_FROM_SPACE), useEnglishNames, 
 						BinaryMapAddressReaderAdapter.VILLAGES_TYPE);
+				
 				for (City c : foundCities) {
 					citiesToFill.add(c);
 					if (resultMatcher.isCancelled()) {
@@ -279,7 +341,8 @@ public class RegionAddressRepositoryBinary implements RegionAddressRepository {
 
 	@Override
 	public void clearCache() {
-		cities.clear();
+		cities = new LinkedHashMap<Long, City>();
+		citiesQtree.clear();
 		postCodes.clear();
 		
 	}

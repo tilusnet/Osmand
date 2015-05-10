@@ -1,11 +1,8 @@
 package net.osmand.plus.osmedit;
 
-import java.util.Map;
-
 import net.osmand.PlatformUtil;
 import net.osmand.data.Amenity;
-import net.osmand.data.AmenityType;
-import net.osmand.osm.MapRenderingTypes;
+import net.osmand.osm.PoiType;
 import net.osmand.osm.edit.EntityInfo;
 import net.osmand.osm.edit.Node;
 import net.osmand.osm.edit.OSMSettings.OSMTagKey;
@@ -52,7 +49,8 @@ public class OpenstreetmapLocalUtil implements OpenstreetmapUtil {
 	
 	@Override
 	public Node loadNode(Amenity n) {
-		if(n.getId() % 2 == 1){
+		PoiType st = n.getType().getPoiTypeByKeyName(n.getSubType());
+		if(n.getId() % 2 == 1 || st == null){
 			// that's way id
 			return null;
 		}
@@ -62,28 +60,10 @@ public class OpenstreetmapLocalUtil implements OpenstreetmapUtil {
 		Node entity = new Node(n.getLocation().getLatitude(),
 							   n.getLocation().getLongitude(),
 							   nodeId);
-
-		Map<AmenityType, Map<String, String>> typeNameToTagVal = MapRenderingTypes.getDefault().getAmenityTypeNameToTagVal();
-		AmenityType type = n.getType();
-		String tag = type.getDefaultTag();
-		String subType = n.getSubType();
-		String val = subType;
-		if (typeNameToTagVal.containsKey(type)) {
-			Map<String, String> map = typeNameToTagVal.get(type);
-			if (map.containsKey(subType)) {
-				String res = map.get(subType);
-				if (res != null) {
-					int i = res.indexOf(' ');
-					if (i != -1) {
-						tag = res.substring(0, i);
-						val = res.substring(i + 1);
-					} else {
-						tag = res;
-					}
-				}
-			}
+		entity.putTag(st.getOsmTag(), st.getOsmValue());
+		if(st.getOsmTag2() != null) {
+			entity.putTag(st.getOsmTag2(), st.getOsmValue2());
 		}
-		entity.putTag(tag, val);
 		entity.putTag(OSMTagKey.NAME.getValue(), n.getName());
 		entity.putTag(OSMTagKey.OPENING_HOURS.getValue(), n.getOpeningHours());
  

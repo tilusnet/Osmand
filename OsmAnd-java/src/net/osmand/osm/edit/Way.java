@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 import net.osmand.data.LatLon;
+import net.osmand.data.QuadRect;
 
 public class Way extends Entity {
 	
@@ -57,6 +58,20 @@ public class Way extends Entity {
 			return -1;
 		}
 		return nodeIds.get(nodeIds.size() - 1);
+	}
+
+	public Node getFirstNode(){
+		if(nodes == null || nodes.size() == 0){
+			return null;
+		}
+		return nodes.get(0);
+	}
+
+	public Node getLastNode(){
+		if(nodes == null || nodes.size() == 0){
+			return null;
+		}
+		return nodes.get(nodes.size() - 1);
 	}
 	
 	public void addNode(Node n){
@@ -131,6 +146,32 @@ public class Way extends Entity {
 			}
 		}
 	}
+
+	public QuadRect getLatLonBBox() {
+		QuadRect qr = null;
+		if(nodes != null) {
+			for(Node n : nodes){
+				if(qr == null) {
+					qr = new QuadRect();
+					qr.left = (float) n.getLongitude();
+					qr.right = (float) n.getLongitude();
+					qr.top   = (float) n.getLatitude();
+					qr.bottom = (float) n.getLatitude();
+				}
+				if(n.getLongitude() < qr.left) {
+					qr.left = (float) n.getLongitude();
+				} else if(n.getLongitude() > qr.right) {
+					qr.right = (float) n.getLongitude();
+				}
+				if(n.getLatitude() > qr.top) {
+					qr.top = (float) n.getLatitude();
+				} else if(n.getLatitude() < qr.bottom) {
+					qr.bottom = (float) n.getLatitude();
+				}
+			}
+		}
+		return qr;
+	}
 	
 	@Override
 	public LatLon getLatLon() {
@@ -139,7 +180,14 @@ public class Way extends Entity {
 		}
 		return OsmMapUtils.getWeightCenterForNodes(nodes);
 	}
-	
-	
 
+
+    public void reverseNodes() {
+        if(nodes != null) {
+            Collections.reverse(nodes);
+        }
+        if(nodeIds != null) {
+            nodeIds.reverse();;
+        }
+    }
 }

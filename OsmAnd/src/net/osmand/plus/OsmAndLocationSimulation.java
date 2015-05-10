@@ -6,16 +6,22 @@ import java.util.List;
 
 import net.osmand.CallbackWithObject;
 import net.osmand.Location;
+import net.osmand.access.AccessibleToast;
 import net.osmand.plus.activities.MapActivity;
-import net.osmand.plus.routing.RouteProvider;
-import net.osmand.plus.routing.RouteProvider.GPXRouteParams;
+import net.osmand.plus.helpers.GpxUiHelper;
+import net.osmand.plus.routing.RouteProvider.GPXRouteParamsBuilder;
 import net.osmand.plus.routing.RoutingHelper;
 import android.app.AlertDialog;
 import android.app.AlertDialog.Builder;
 import android.content.DialogInterface;
 import android.view.View;
+import android.widget.CompoundButton;
+import android.widget.CompoundButton.OnCheckedChangeListener;
+import android.widget.LinearLayout;
+import android.widget.RadioButton;
 import android.widget.SeekBar;
 import android.widget.TextView;
+import android.widget.Toast;
 
 public class OsmAndLocationSimulation {
 
@@ -31,42 +37,70 @@ public class OsmAndLocationSimulation {
 	public boolean isRouteAnimating() {
 		return routeAnimation != null;
 	}
+	
+//	public void startStopRouteAnimationRoute(final MapActivity ma) {
+//		if (!isRouteAnimating()) {
+//			List<Location> currentRoute = app.getRoutingHelper().getCurrentRoute();
+//			if (currentRoute.isEmpty()) {
+//				AccessibleToast.makeText(app, R.string.animate_routing_route_not_calculated, Toast.LENGTH_LONG).show();
+//			} else {
+//				startAnimationThread(app.getRoutingHelper(), ma, new ArrayList<Location>(currentRoute), false, 1);
+//			}
+//		} else {
+//			stop();
+//		}
+//	}
 
 	public void startStopRouteAnimation(final MapActivity ma) {
 		if (!isRouteAnimating()) {
 			Builder builder = new AlertDialog.Builder(ma);
-			builder.setTitle(R.string.animate_routing_using_gpx);
+			builder.setTitle(R.string.animate_route);
+			
 			final View view = ma.getLayoutInflater().inflate(R.layout.animate_route, null);
+			final View gpxView = ((LinearLayout)view.findViewById(R.id.layout_animate_gpx));
+			final RadioButton radioGPX = (RadioButton)view.findViewById(R.id.radio_gpx);
+			radioGPX.setOnCheckedChangeListener(new OnCheckedChangeListener() {
+				
+				@Override
+				public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+					gpxView.setVisibility(isChecked? View.VISIBLE : View.GONE);
+				}
+			});
+			
+			
 			((TextView)view.findViewById(R.id.MinSpeedup)).setText("1"); //$NON-NLS-1$
 			((TextView)view.findViewById(R.id.MaxSpeedup)).setText("4"); //$NON-NLS-1$
 			final SeekBar speedup = (SeekBar) view.findViewById(R.id.Speedup);
 			speedup.setMax(3);
 			builder.setView(view);
-			builder.setPositiveButton(R.string.default_buttons_yes, new DialogInterface.OnClickListener() {
+			builder.setPositiveButton(R.string.shared_string_ok, new DialogInterface.OnClickListener() {
 				
 				@Override
 				public void onClick(DialogInterface dialog, int which) {
-					ma.getMapLayers().selectGPXFileLayer(true, false, false, new CallbackWithObject<GPXUtilities.GPXFile>() {
-						
-						@Override
-						public boolean processResult(GPXUtilities.GPXFile result) {
-							GPXRouteParams prms = new RouteProvider.GPXRouteParams(result, false, 
-									app.getSettings());
-							startAnimationThread(app.getRoutingHelper(), ma, prms.getPoints(), true, speedup.getProgress() + 1);
-							return true;
+					boolean gpxNavigation = radioGPX.isChecked();
+					if (gpxNavigation) {
+						GpxUiHelper.selectGPXFile(ma, false, false,
+								new CallbackWithObject<GPXUtilities.GPXFile[]>() {
+									@Override
+									public boolean processResult(GPXUtilities.GPXFile[] result) {
+										GPXRouteParamsBuilder builder = new GPXRouteParamsBuilder(result[0], app.getSettings());
+										startAnimationThread(app.getRoutingHelper(), ma, builder.getPoints(), true,
+												speedup.getProgress() + 1);
+										return true;
+									}
+								});
+					} else {
+						List<Location> currentRoute = app.getRoutingHelper().getCurrentCalculatedRoute();
+						if(currentRoute.isEmpty()) {
+							AccessibleToast.makeText(app, R.string.animate_routing_route_not_calculated, Toast.LENGTH_LONG).show();
+						} else {
+							startAnimationThread(app.getRoutingHelper(), ma, new ArrayList<Location>(currentRoute), false, 1);
 						}
-					});
-					
+					}
+
 				}
 			});
-			builder.setNegativeButton(R.string.default_buttons_no, new DialogInterface.OnClickListener() {
-				
-				@Override
-				public void onClick(DialogInterface dialog, int which) {
-					startAnimationThread(app.getRoutingHelper(), ma, 
-							new ArrayList<Location>(app.getRoutingHelper().getCurrentRoute()), false, 1);
-				}
-			});
+			builder.setNegativeButton(R.string.shared_string_cancel, null);
 			builder.show();
 		} else {
 			stop();

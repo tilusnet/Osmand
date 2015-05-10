@@ -1,6 +1,7 @@
 package net.osmand.plus;
 
 import java.io.IOException;
+import java.util.HashMap;
 
 import net.osmand.Location;
 import net.osmand.binary.RouteDataObject;
@@ -17,67 +18,84 @@ public class CurrentPositionHelper {
 	private Location lastAskedLocation = null;
 	private Thread calculatingThread = null;
 	private RoutingContext ctx;
-	private ClientContext app;
+	private OsmandApplication app;
 	private ApplicationMode am;
 
-	public CurrentPositionHelper(ClientContext app) {
+	public CurrentPositionHelper(OsmandApplication app) {
 		this.app = app;
 	}
 
-	private void initCtx(ClientContext app) {
+	private void initCtx(OsmandApplication app) {
 		am = app.getSettings().getApplicationMode();
 		GeneralRouterProfile p ;
-		if (am == ApplicationMode.BICYCLE) {
+		if (am.isDerivedRoutingFrom(ApplicationMode.BICYCLE)) {
 			p = GeneralRouterProfile.BICYCLE;
-		} else if (am == ApplicationMode.PEDESTRIAN) {
+		} else if (am.isDerivedRoutingFrom(ApplicationMode.PEDESTRIAN)) {
 			p = GeneralRouterProfile.PEDESTRIAN;
-		} else {
+		} else if (am.isDerivedRoutingFrom(ApplicationMode.CAR)) {
 			p = GeneralRouterProfile.CAR;
+		} else {
+			return;
 		}
-		RoutingConfiguration cfg = RoutingConfiguration.getDefault().build(p.name().toLowerCase(), 10);
-		ctx = new RoutingContext(cfg, null, app.getTodoAPI().getRoutingMapFiles());
+		RoutingConfiguration cfg = app.getDefaultRoutingConfig().build(p.name().toLowerCase(), 10, 
+				new HashMap<String, String>());
+		ctx = new RoutePlannerFrontEnd(false).buildRoutingContext(cfg, null, app.getResourceManager().getRoutingMapFiles());
 	}
 	
-	private RouteDataObject runUpdateInThread(Location loc) {
+	public synchronized RouteDataObject runUpdateInThread(double lat, double lon) throws IOException {
 		RoutePlannerFrontEnd rp = new RoutePlannerFrontEnd(false);
-		try {
-			if(ctx == null || am != app.getSettings().getApplicationMode()) {
-				initCtx(app);
-			}
-			RouteSegment sg = rp.findRouteSegment(loc.getLatitude(), loc.getLongitude(), ctx);
-			if(sg == null) {
+		if (ctx == null || am != app.getSettings().getApplicationMode()) {
+			initCtx(app);
+			if (ctx == null) {
 				return null;
 			}
-			return sg.getRoad();
+		}
+		RouteSegment sg = rp.findRouteSegment(lat, lon, ctx);
+		if (sg == null) {
+			return null;
+		}
+		return sg.getRoad();
+
+	}
+	
+	
+	private void scheduleRouteSegmentFind(final Location loc) {
+		Thread calcThread = calculatingThread;
+		if (calcThread == Thread.currentThread()) {
+			lastFound = runUpdateInThreadCatch(loc.getLatitude(), loc.getLongitude());
+		} else if (loc != null) {
+			if (calcThread == null) {
+				Runnable run = new Runnable() {
+					@Override
+					public void run() {
+						try {
+							lastFound = runUpdateInThreadCatch(loc.getLatitude(), loc.getLongitude());
+							if (lastAskedLocation != loc) {
+								// refresh and run new task if needed
+								getLastKnownRouteSegment(lastAskedLocation);
+							}
+						} finally {
+							calculatingThread = null;
+						}
+					}
+				};
+				calculatingThread = app.getRoutingHelper().startTaskInRouteThreadIfPossible(run);
+			} else if (calcThread != null && !calcThread.isAlive()) {
+				calculatingThread = null;
+			}
+		}
+
+	}
+	
+	protected RouteDataObject runUpdateInThreadCatch(double latitude, double longitude) {
+		try {
+			return runUpdateInThread(latitude, longitude);
 		} catch (IOException e) {
+			e.printStackTrace();
 			return null;
 		}
 	}
-	
-	
-	private void scheduleRouteSegmentFind(final Location loc){
-		if(calculatingThread == Thread.currentThread()) {
-			lastFound = runUpdateInThread(loc);
-		} else if(calculatingThread == null && loc != null) {
-			Runnable run = new Runnable() {
-				@Override
-				public void run() {
-					try {
-						lastFound = runUpdateInThread(loc);
-						if (lastAskedLocation != loc) {
-							// refresh and run new task if needed
-							getLastKnownRouteSegment(lastAskedLocation);
-						}
-					} finally {
-						calculatingThread = null;
-					}
-				}
-			};
-			calculatingThread = app.getRoutingHelper().startTaskInRouteThreadIfPossible(run);
-		}
-		
-	}
-	
+
 	private static double getOrthogonalDistance(RouteDataObject r, Location loc){
 		double d = 1000;
 		if (r.getPointsLength() > 0) {

@@ -1,10 +1,40 @@
 bin/
 dist/
+res/values/no_translate.xml
 assets/specialphrases/*
 assets/voice/*
 gen/
 local.properties
 raw/
 obj/
+libgnustl/
 cpd.xml
 jni/Local.mk
+out/
+use/
+osmand.properties
+osmand.xml
+assets/help/*.html
+assets/help/images
+assets/help/screens
+assets/OsmAndCore_ResourcesBundle.index
+assets/OsmAndCore_ResourcesBundle/
+
+# Android Studio
+/.idea
+*.iml
+
+# Gradle
+.gradle
+/local.properties
+
+# MacOSX
+.DS_Store
+
+# Output
+/build
+
+# Project-specific
+/helpAssets
+/voiceAssets
+/resourcesSrc

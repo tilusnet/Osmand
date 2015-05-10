@@ -4,7 +4,7 @@ public abstract class BaseMapLayer extends OsmandMapLayer {
 
 	private int alpha = 255;
 	protected int warningToSwitchMapShown = 0;
-	
+
 	public int getMaximumShownMapZoom(){
 		return 21;
 	}

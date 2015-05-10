@@ -4,39 +4,36 @@ import java.io.BufferedWriter;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileWriter;
-import java.io.IOException;
 import java.io.PrintStream;
 import java.lang.Thread.UncaughtExceptionHandler;
 import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 
 import net.osmand.IndexConstants;
-import net.osmand.Location;
 import net.osmand.PlatformUtil;
+import net.osmand.access.AccessibilityPlugin;
+import net.osmand.access.AccessibleAlertBuilder;
 import net.osmand.access.AccessibleToast;
-import net.osmand.data.FavouritePoint;
-import net.osmand.plus.GPXUtilities.GPXFile;
-import net.osmand.plus.GPXUtilities.WptPt;
+import net.osmand.map.OsmandRegions;
+import net.osmand.osm.MapPoiTypes;
+import net.osmand.plus.AppInitializer.AppInitializeListener;
+import net.osmand.plus.access.AccessibilityMode;
 import net.osmand.plus.activities.DayNightHelper;
-import net.osmand.plus.activities.LiveMonitoringHelper;
-import net.osmand.plus.activities.OsmandIntents;
+import net.osmand.plus.activities.ExitActivity;
 import net.osmand.plus.activities.SavingTrackHelper;
 import net.osmand.plus.activities.SettingsActivity;
-import net.osmand.plus.api.ExternalServiceAPI;
-import net.osmand.plus.api.InternalOsmAndAPI;
-import net.osmand.plus.api.InternalToDoAPI;
 import net.osmand.plus.api.SQLiteAPI;
 import net.osmand.plus.api.SQLiteAPIImpl;
-import net.osmand.plus.api.SettingsAPI;
-import net.osmand.plus.render.NativeOsmandLibrary;
+import net.osmand.plus.helpers.AvoidSpecificRoads;
+import net.osmand.plus.helpers.WaypointHelper;
+import net.osmand.plus.monitoring.LiveMonitoringHelper;
+import net.osmand.plus.poi.PoiFiltersHelper;
 import net.osmand.plus.render.RendererRegistry;
 import net.osmand.plus.resources.ResourceManager;
 import net.osmand.plus.routing.RoutingHelper;
+import net.osmand.plus.sherpafy.SherpafyCustomization;
 import net.osmand.plus.voice.CommandPlayer;
-import net.osmand.plus.voice.CommandPlayerException;
-import net.osmand.plus.voice.CommandPlayerFactory;
-import net.osmand.render.RenderingRulesStorage;
+import net.osmand.router.RoutingConfiguration;
 import net.osmand.util.Algorithms;
 import android.app.Activity;
 import android.app.AlarmManager;
@@ -44,63 +41,72 @@ import android.app.AlertDialog;
 import android.app.AlertDialog.Builder;
 import android.app.Application;
 import android.app.PendingIntent;
-import android.app.ProgressDialog;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.res.Configuration;
-import android.graphics.Shader.TileMode;
-import android.graphics.drawable.BitmapDrawable;
+import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Message;
-import android.os.StrictMode;
 import android.text.format.DateFormat;
+import android.util.TypedValue;
+import android.view.View;
+import android.view.accessibility.AccessibilityManager;
+import android.widget.CheckBox;
+import android.widget.LinearLayout;
+import android.widget.LinearLayout.LayoutParams;
+import android.widget.TextView;
 import android.widget.Toast;
-
-import com.actionbarsherlock.app.ActionBar;
-import com.actionbarsherlock.app.SherlockActivity;
-import com.actionbarsherlock.app.SherlockExpandableListActivity;
-import com.actionbarsherlock.app.SherlockListActivity;
+import btools.routingapp.BRouterServiceConnection;
+import btools.routingapp.IBRouterService;
 
 
-public class OsmandApplication extends Application implements ClientContext {
+
+public class OsmandApplication extends Application {
 	public static final String EXCEPTION_PATH = "exception.log"; //$NON-NLS-1$
 	private static final org.apache.commons.logging.Log LOG = PlatformUtil.getLog(OsmandApplication.class);
 
-	ResourceManager manager = null;
-	PoiFiltersHelper poiFilters = null;
-	RoutingHelper routingHelper = null;
-	FavouritesDbHelper favorites = null;
-	CommandPlayer player = null;
-
+	final AppInitializer appInitializer = new AppInitializer(this);
 	OsmandSettings osmandSettings = null;
+	OsmAndAppCustomization appCustomization;
+	private final SQLiteAPI sqliteAPI = new SQLiteAPIImpl(this);
+	private final OsmAndTaskManager taskManager = new OsmAndTaskManager(this);
+	private final IconsCache iconsCache = new IconsCache(this);
+	Handler uiHandler;
 
-	DayNightHelper daynightHelper;
 	NavigationService navigationService;
-	RendererRegistry rendererRegistry;
-	OsmAndLocationProvider locationProvider;
-	OsmAndTaskManager taskManager;
-
-	// start variables
-	private ProgressDialogImplementation startDialog;
-	private List<String> startingWarnings;
-	private Handler uiHandler;
-	private GPXFile gpxFileToDisplay;
-	private SavingTrackHelper savingTrackHelper;
-	private LiveMonitoringHelper liveMonitoringHelper;
-	private TargetPointsHelper targetPointsHelper;
-
-	private boolean applicationInitializing = false;
-	private Locale prefferedLocale = null;
+	private Locale preferredLocale = null;
 	
-	SettingsAPI settingsAPI;
-	ExternalServiceAPI externalServiceAPI;
-	InternalToDoAPI internalToDoAPI;
-	InternalOsmAndAPI internalOsmAndAPI;
-	SQLiteAPI sqliteAPI;
+	// start variables
+	ResourceManager resourceManager;
+	OsmAndLocationProvider locationProvider;
+	RendererRegistry rendererRegistry;
+	DayNightHelper daynightHelper;
+	PoiFiltersHelper poiFilters;
+	MapPoiTypes poiTypes;
+	RoutingHelper routingHelper;
+	FavouritesDbHelper favorites;
+	CommandPlayer player;
+	GpxSelectionHelper selectedGpxHelper;
+	SavingTrackHelper savingTrackHelper;
+	LiveMonitoringHelper liveMonitoringHelper;
+	TargetPointsHelper targetPointsHelper;
+	WaypointHelper waypointHelper;
+	AvoidSpecificRoads avoidSpecificRoads;
+	BRouterServiceConnection bRouterServiceConnection;
+	OsmandRegions regions;
+	
 
+	RoutingConfiguration.Builder defaultRoutingConfig;
+	private Locale defaultLocale;
+	private File externalStorageDirectory;
+	
+	
+	// Typeface
+	
 	@Override
 	public void onCreate() {
 		long timeToStart = System.currentTimeMillis();
@@ -114,56 +120,59 @@ public class OsmandApplication extends Application implements ClientContext {
 			}
 		}
 		super.onCreate();
-		 
-		settingsAPI = new net.osmand.plus.api.SettingsAPIImpl(this);
-		externalServiceAPI = new net.osmand.plus.api.ExternalServiceAPIImpl(this);
-		internalToDoAPI = new net.osmand.plus.api.InternalToDoAPIImpl(this);
-		internalOsmAndAPI = new net.osmand.plus.api.InternalOsmAndAPIImpl(this);
-		sqliteAPI = new SQLiteAPIImpl(this);
-
-		// settings used everywhere so they need to be created first
-		osmandSettings = createOsmandSettingsInstance();
-		// always update application mode to default
-		if(!osmandSettings.FOLLOW_THE_ROUTE.get()){
-			osmandSettings.APPLICATION_MODE.set(osmandSettings.DEFAULT_APPLICATION_MODE.get());
-		}
-		
-		applyTheme(this);
-		
-		routingHelper = new RoutingHelper(this, player);
-		taskManager = new OsmAndTaskManager(this);
-		manager = new ResourceManager(this);
-		daynightHelper = new DayNightHelper(this);
-		locationProvider = new OsmAndLocationProvider(this);
-		savingTrackHelper = new SavingTrackHelper(this);
-		liveMonitoringHelper = new LiveMonitoringHelper(this);
+		createInUiThread();
 		uiHandler = new Handler();
-		rendererRegistry = new RendererRegistry();
-		targetPointsHelper = new TargetPointsHelper(this);
+		if(Version.isSherpafy(this)) {
+			appCustomization = new SherpafyCustomization();
+		} else {
+			appCustomization = new OsmAndAppCustomization();
+		}
+		appCustomization.setup(this);
+		osmandSettings = appCustomization.getOsmandSettings();
+		externalStorageDirectory = osmandSettings.getExternalStorageDirectory();
+		
+		appInitializer.onCreateApplication();
 //		if(!osmandSettings.FOLLOW_THE_ROUTE.get()) {
 //			targetPointsHelper.clearPointToNavigate(false);
 //		}
-		
-		checkPrefferedLocale();
+		checkPreferredLocale();
 		startApplication();
-		if (LOG.isDebugEnabled()) {
-			LOG.debug("Time to start application " + (System.currentTimeMillis() - timeToStart) + " ms. Should be less < 800 ms");
-		}
+		System.out.println("Time to start application " + (System.currentTimeMillis() - timeToStart) + " ms. Should be less < 800 ms");
 		timeToStart = System.currentTimeMillis();
 		OsmandPlugin.initPlugins(this);
+		System.out.println("Time to init plugins " + (System.currentTimeMillis() - timeToStart) + " ms. Should be less < 800 ms");
+	}
+	
+	public AppInitializer getAppInitializer() {
+		return appInitializer;
+	}
+	
+	public MapPoiTypes getPoiTypes() {
+		return poiTypes;
+	}
 
-		if (LOG.isDebugEnabled()) {
-			LOG.debug("Time to init plugins " + (System.currentTimeMillis() - timeToStart) + " ms. Should be less < 800 ms");
-		}
-		
-		
+	private void createInUiThread() {
+		new Toast(this); // activate in UI thread to avoid further exceptions
+		new AsyncTask<View, Void, Void>() {
+			@Override
+			protected Void doInBackground(View... params) {
+				return null;
+			}
+
+			protected void onPostExecute(Void result) {
+			}
+		}.execute();
+	}
+	
+	public IconsCache getIconsCache() {
+		return iconsCache;
 	}
 
 	@Override
 	public void onTerminate() {
 		super.onTerminate();
 		if (routingHelper != null) {
-			routingHelper.getVoiceRouter().onApplicationTerminate(this);
+			routingHelper.getVoiceRouter().onApplicationTerminate();
 		}
 	}
 
@@ -174,18 +183,23 @@ public class OsmandApplication extends Application implements ClientContext {
 	public OsmAndTaskManager getTaskManager() {
 		return taskManager;
 	}
-
-	/**
-	 * Creates instance of OsmandSettings
-	 * 
-	 * @return Reference to instance of OsmandSettings
-	 */
-	protected OsmandSettings createOsmandSettingsInstance() {
-		return new OsmandSettings(this);
-	}
 	
+	public AvoidSpecificRoads getAvoidSpecificRoads() {
+		return avoidSpecificRoads;
+	}
+
 	public OsmAndLocationProvider getLocationProvider() {
 		return locationProvider;
+	}
+	
+	public OsmAndAppCustomization getAppCustomization() {
+		return appCustomization;
+	}
+	
+	
+	public void setAppCustomization(OsmAndAppCustomization appCustomization) {
+		this.appCustomization = appCustomization;
+		this.appCustomization.setup(this);
 	}
 
 	/**
@@ -208,48 +222,25 @@ public class OsmandApplication extends Application implements ClientContext {
 		return liveMonitoringHelper;
 	}
 
+	public WaypointHelper getWaypointHelper() {
+		return waypointHelper;
+	}
+
 	public PoiFiltersHelper getPoiFilters() {
-		if (poiFilters == null) {
-			poiFilters = new PoiFiltersHelper(this);
-		}
 		return poiFilters;
 	}
 
-	public void setGpxFileToDisplay(GPXFile gpxFileToDisplay, boolean showCurrentGpxFile) {
-		this.gpxFileToDisplay = gpxFileToDisplay;
-		osmandSettings.SHOW_CURRENT_GPX_TRACK.set(showCurrentGpxFile);
-		if (gpxFileToDisplay == null) {
-			getFavorites().setFavoritePointsFromGPXFile(null);
-		} else {
-			List<FavouritePoint> pts = new ArrayList<FavouritePoint>();
-			for (WptPt p : gpxFileToDisplay.points) {
-				FavouritePoint pt = new FavouritePoint();
-				pt.setLatitude(p.lat);
-				pt.setLongitude(p.lon);
-				if (p.name == null) {
-					p.name = "";
-				}
-				pt.setName(p.name);
-				pts.add(pt);
-			}
-			gpxFileToDisplay.proccessPoints();
-			getFavorites().setFavoritePointsFromGPXFile(pts);
-		}
-	}
 
-	public GPXFile getGpxFileToDisplay() {
-		return gpxFileToDisplay;
+	public GpxSelectionHelper getSelectedGpxHelper() {
+		return selectedGpxHelper;
 	}
 
 	public FavouritesDbHelper getFavorites() {
-		if (favorites == null) {
-			favorites = new FavouritesDbHelper(this);
-		}
 		return favorites;
 	}
 
 	public ResourceManager getResourceManager() {
-		return manager;
+		return resourceManager;
 	}
 
 	public DayNightHelper getDaynightHelper() {
@@ -259,71 +250,62 @@ public class OsmandApplication extends Application implements ClientContext {
 	@Override
 	public void onLowMemory() {
 		super.onLowMemory();
-		manager.onLowMemory();
+		resourceManager.onLowMemory();
 	}
 
 	@Override
 	public void onConfigurationChanged(Configuration newConfig) {
-		if (prefferedLocale != null && !newConfig.locale.getLanguage().equals(prefferedLocale.getLanguage())) {
+		if (preferredLocale != null && !newConfig.locale.getLanguage().equals(preferredLocale.getLanguage())) {
 			super.onConfigurationChanged(newConfig);
 			// ugly fix ! On devices after 4.0 screen is blinking when you rotate device!
 			if (Build.VERSION.SDK_INT < 14) {
-				newConfig.locale = prefferedLocale;
+				newConfig.locale = preferredLocale;
 			}
 			getBaseContext().getResources().updateConfiguration(newConfig, getBaseContext().getResources().getDisplayMetrics());
-			Locale.setDefault(prefferedLocale);
+			Locale.setDefault(preferredLocale);
 		} else {
 			super.onConfigurationChanged(newConfig);
 		}
 	}
 
-	public void checkPrefferedLocale() {
+	public void checkPreferredLocale() {
 		Configuration config = getBaseContext().getResources().getConfiguration();
 		String lang = osmandSettings.PREFERRED_LOCALE.get();
+		if(defaultLocale == null) {
+			defaultLocale = Locale.getDefault();
+		}
 		if (!"".equals(lang) && !config.locale.getLanguage().equals(lang)) {
-			prefferedLocale = new Locale(lang);
-			Locale.setDefault(prefferedLocale);
-			config.locale = prefferedLocale;
+			preferredLocale = new Locale(lang);
+			Locale.setDefault(preferredLocale);
+			config.locale = preferredLocale;
+			getBaseContext().getResources().updateConfiguration(config, getBaseContext().getResources().getDisplayMetrics());
+		} else if("".equals(lang) && defaultLocale != null && Locale.getDefault() != defaultLocale) {
+			Locale.setDefault(defaultLocale);
+			config.locale = defaultLocale;
+			preferredLocale = null;
 			getBaseContext().getResources().updateConfiguration(config, getBaseContext().getResources().getDisplayMetrics());
 		}
-
+		
 	}
 
 	public static final int PROGRESS_DIALOG = 5;
 
-	/**
-	 * @param activity
-	 *            that supports onCreateDialog({@link #PROGRESS_DIALOG}) and returns @param progressdialog
-	 * @param progressDialog
-	 *            - it should be exactly the same as onCreateDialog
-	 * @return
-	 */
-	public void checkApplicationIsBeingInitialized(Activity activity, ProgressDialog progressDialog) {
+	public void checkApplicationIsBeingInitialized(Activity activity, AppInitializeListener listener) {
 		// start application if it was previously closed
 		startApplication();
-		synchronized (OsmandApplication.this) {
-			if (startDialog != null) {
-				try {
-					SpecialPhrases.setLanguage(this, osmandSettings);
-				} catch (IOException e) {
-					LOG.error("I/O exception", e);
-					Toast error = Toast.makeText(this, "Error while reading the special phrases. Restart OsmAnd if possible",
-							Toast.LENGTH_LONG);
-					error.show();
-				}
-
-				progressDialog.setTitle(getString(R.string.loading_data));
-				progressDialog.setMessage(getString(R.string.reading_indexes));
-				activity.showDialog(PROGRESS_DIALOG);
-				startDialog.setDialog(progressDialog);
-			} else if (startingWarnings != null) {
-				showWarnings(startingWarnings, activity);
-			}
+		if(listener != null) {
+			appInitializer.addListener(listener);
 		}
 	}
-
+	
+	public void unsubscribeInitListener(AppInitializeListener listener) {
+		if(listener != null) {
+			appInitializer.removeListener(listener);
+		}		
+	}
+	
 	public boolean isApplicationInitializing() {
-		return startDialog != null;
+		return appInitializer.isAppInitializing();
 	}
 
 	public RoutingHelper getRoutingHelper() {
@@ -334,65 +316,65 @@ public class OsmandApplication extends Application implements ClientContext {
 		return player;
 	}
 
-	public void showDialogInitializingCommandPlayer(final Activity uiContext) {
-		showDialogInitializingCommandPlayer(uiContext, true);
+	public void initVoiceCommandPlayer(final Activity uiContext) {
+		showDialogInitializingCommandPlayer(uiContext, true, null, false);
 	}
 
 	public void showDialogInitializingCommandPlayer(final Activity uiContext, boolean warningNoneProvider) {
-		showDialogInitializingCommandPlayer(uiContext, warningNoneProvider, null);
+		showDialogInitializingCommandPlayer(uiContext, warningNoneProvider, null, true);
 	}
 
-	public void showDialogInitializingCommandPlayer(final Activity uiContext, boolean warningNoneProvider, Runnable run) {
+	public void showDialogInitializingCommandPlayer(final Activity uiContext, boolean warningNoneProvider, Runnable run, boolean showDialog) {
 		String voiceProvider = osmandSettings.VOICE_PROVIDER.get();
 		if (voiceProvider == null || OsmandSettings.VOICE_PROVIDER_NOT_USE.equals(voiceProvider)) {
 			if (warningNoneProvider && voiceProvider == null) {
-				Builder builder = new AlertDialog.Builder(uiContext);
+				Builder builder = new AccessibleAlertBuilder(uiContext);
+				LinearLayout ll = new LinearLayout(uiContext);
+				ll.setOrientation(LinearLayout.VERTICAL);
+				final TextView tv = new TextView(uiContext);
+				tv.setPadding(7, 3, 7, 0);
+				tv.setText(R.string.voice_is_not_available_msg);
+				tv.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 19);
+				ll.addView(tv);
+				
+				final CheckBox cb = new CheckBox(uiContext);
+				cb.setText(R.string.shared_string_remember_my_choice);
+				LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT);
+				lp.setMargins(7, 10, 7, 0);
+				cb.setLayoutParams(lp);
+				ll.addView(cb);
+				
 				builder.setCancelable(true);
-				builder.setNegativeButton(R.string.default_buttons_cancel, null);
-				builder.setPositiveButton(R.string.default_buttons_ok, new DialogInterface.OnClickListener() {
-
+				builder.setNegativeButton(R.string.shared_string_cancel, new DialogInterface.OnClickListener() {
+					@Override
+					public void onClick(DialogInterface dialog, int which) {
+						if(cb.isChecked()) {
+							osmandSettings.VOICE_PROVIDER.set(OsmandSettings.VOICE_PROVIDER_NOT_USE);
+						}
+					}
+				});
+				builder.setPositiveButton(R.string.shared_string_ok, new DialogInterface.OnClickListener() {
 					@Override
 					public void onClick(DialogInterface dialog, int which) {
 						Intent intent = new Intent(uiContext, SettingsActivity.class);
-						intent.putExtra(SettingsActivity.INTENT_KEY_SETTINGS_SCREEN, SettingsActivity.SCREEN_NAVIGATION_SETTINGS);
+						intent.putExtra(SettingsActivity.INTENT_KEY_SETTINGS_SCREEN, SettingsActivity.SCREEN_GENERAL_SETTINGS);
 						uiContext.startActivity(intent);
 					}
 				});
+				
+				
 				builder.setTitle(R.string.voice_is_not_available_title);
-				builder.setMessage(R.string.voice_is_not_available_msg);
+				builder.setView(ll);
+				//builder.setMessage(R.string.voice_is_not_available_msg);
 				builder.show();
 			}
 
 		} else {
 			if (player == null || !Algorithms.objectEquals(voiceProvider, player.getCurrentVoice())) {
-				initVoiceDataInDifferentThread(uiContext, voiceProvider, run);
+				appInitializer.	initVoiceDataInDifferentThread(uiContext, voiceProvider, run, showDialog);
 			}
 		}
 
-	}
-
-	private void initVoiceDataInDifferentThread(final Activity uiContext, final String voiceProvider, final Runnable run) {
-		final ProgressDialog dlg = ProgressDialog.show(uiContext, getString(R.string.loading_data),
-				getString(R.string.voice_data_initializing));
-		new Thread(new Runnable() {
-			@Override
-			public void run() {
-				try {
-					if (player != null) {
-						player.clear();
-					}
-					player = CommandPlayerFactory.createCommandPlayer(voiceProvider, OsmandApplication.this, uiContext);
-					routingHelper.getVoiceRouter().setPlayer(player);
-					dlg.dismiss();
-					if (run != null && uiContext != null) {
-						uiContext.runOnUiThread(run);
-					}
-				} catch (CommandPlayerException e) {
-					dlg.dismiss();
-					showWarning(uiContext, e.getError());
-				}
-			}
-		}).start();
 	}
 
 	public NavigationService getNavigationService() {
@@ -414,36 +396,40 @@ public class OsmandApplication extends Application implements ClientContext {
 		if (getNavigationService() != null) {
 			Builder bld = new AlertDialog.Builder(activity);
 			bld.setMessage(R.string.background_service_is_enabled_question);
-			bld.setPositiveButton(R.string.default_buttons_yes, new DialogInterface.OnClickListener() {
+			bld.setPositiveButton(R.string.shared_string_yes, new DialogInterface.OnClickListener() {
 				@Override
 				public void onClick(DialogInterface dialog, int which) {
-					closeApplicationAnyway(activity, true);
+					closeApplicationAnywayImpl(activity, true);
 				}
 			});
-			bld.setNegativeButton(R.string.default_buttons_no, new DialogInterface.OnClickListener() {
+			bld.setNegativeButton(R.string.shared_string_no, new DialogInterface.OnClickListener() {
 				@Override
 				public void onClick(DialogInterface dialog, int which) {
-					closeApplicationAnyway(activity, false);
+					closeApplicationAnywayImpl(activity, false);
 				}
 			});
 			bld.show();
 		} else {
-			closeApplicationAnyway(activity, true);
+			closeApplicationAnywayImpl(activity, true);
 		}
 	}
-
+	
 	private void closeApplicationAnyway(final Activity activity, boolean disableService) {
-		if (applicationInitializing) {
-			manager.close();
-		}
-		applicationInitializing = false;
-
 		activity.finish();
+		Intent newIntent = new Intent(activity, ExitActivity.class);
+		newIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
+		newIntent.putExtra(ExitActivity.DISABLE_SERVICE, disableService);
+		startActivity(newIntent);
+	}
 
+	public void closeApplicationAnywayImpl(final Activity activity, boolean disableService) {
+		if (appInitializer.isAppInitializing()) {
+			resourceManager.close();
+		}
+		activity.finish();
 		if (getNavigationService() == null) {
 			fullExit();
-		}
-		else if (disableService) {
+		} else if (disableService) {
 			final Intent serviceIntent = new Intent(this, NavigationService.class);
 			stopService(serviceIntent);
 
@@ -464,128 +450,9 @@ public class OsmandApplication extends Application implements ClientContext {
 		}
 	}
 
-	public synchronized void startApplication() {
-		if (applicationInitializing) {
-			return;
-		}
-		applicationInitializing = true;
-		startDialog = new ProgressDialogImplementation(this, null, false);
-
-		startDialog.setRunnable("Initializing app", new Runnable() { //$NON-NLS-1$
-					@Override
-					public void run() {
-						startApplicationBackground();
-					}
-				});
-		startDialog.run();
-
+	public void startApplication() {
 		Thread.setDefaultUncaughtExceptionHandler(new DefaultExceptionHandler());
-
-	}
-
-	public String exportFavorites(File f) {
-		GPXFile gpx = new GPXFile();
-		for (FavouritePoint p : getFavorites().getFavouritePoints()) {
-			if (p.isStored()) {
-				WptPt pt = new WptPt();
-				pt.lat = p.getLatitude();
-				pt.lon = p.getLongitude();
-				pt.name = p.getName() + "_" + p.getCategory();
-				gpx.points.add(pt);
-			}
-		}
-		return GPXUtilities.writeGpxFile(f, gpx, this);
-	}
-
-	private void startApplicationBackground() {
-		List<String> warnings = new ArrayList<String>();
-		try {
-			if (!Version.isBlackberry(this)) {
-				if (osmandSettings.NATIVE_RENDERING_FAILED.get()) {
-					osmandSettings.SAFE_MODE.set(true);
-					osmandSettings.NATIVE_RENDERING_FAILED.set(false);
-					warnings.add(getString(R.string.native_library_not_supported));
-				} else {
-					osmandSettings.SAFE_MODE.set(false);
-					osmandSettings.NATIVE_RENDERING_FAILED.set(true);
-					startDialog.startTask(getString(R.string.init_native_library), -1);
-					RenderingRulesStorage storage = rendererRegistry.getCurrentSelectedRenderer();
-					boolean initialized = NativeOsmandLibrary.getLibrary(storage, this) != null;
-					osmandSettings.NATIVE_RENDERING_FAILED.set(false);
-					if (!initialized) {
-						LOG.info("Native library could not be loaded!");
-					}
-				}
-			}
-			warnings.addAll(manager.reloadIndexes(startDialog));
-			player = null;
-			if (savingTrackHelper.hasDataToSave()) {
-				startDialog.startTask(getString(R.string.saving_gpx_tracks), -1);
-				warnings.addAll(savingTrackHelper.saveDataToGpx());
-			}
-
-			// restore backuped favorites to normal file
-			final File appDir = getAppPath(null);
-			File save = new File(appDir, FavouritesDbHelper.FILE_TO_SAVE);
-			File bak = new File(appDir, FavouritesDbHelper.FILE_TO_BACKUP);
-			if (bak.exists() && (!save.exists() || bak.lastModified() > save.lastModified())) {
-				if (save.exists()) {
-					save.delete();
-				}
-				bak.renameTo(save);
-			}
-		} finally {
-			synchronized (OsmandApplication.this) {
-				final ProgressDialog toDismiss;
-				if (startDialog != null) {
-					toDismiss = startDialog.getDialog();
-				} else {
-					toDismiss = null;
-				}
-				startDialog = null;
-
-				if (toDismiss != null) {
-					uiHandler.post(new Runnable() {
-						@Override
-						public void run() {
-							if (toDismiss != null) {
-								// TODO handling this dialog is bad, we need a better standard way
-								toDismiss.dismiss();
-								// toDismiss.getOwnerActivity().dismissDialog(PROGRESS_DIALOG);
-							}
-						}
-					});
-					showWarnings(warnings, toDismiss.getContext());
-				} else {
-					startingWarnings = warnings;
-				}
-			}
-		}
-	}
-
-	protected void showWarnings(List<String> warnings, final Context uiContext) {
-		if (warnings != null && !warnings.isEmpty()) {
-			final StringBuilder b = new StringBuilder();
-			boolean f = true;
-			for (String w : warnings) {
-				if (f) {
-					f = false;
-				} else {
-					b.append('\n');
-				}
-				b.append(w);
-			}
-			showWarning(uiContext, b.toString());
-		}
-	}
-
-	private void showWarning(final Context uiContext, final String b) {
-		uiHandler.post(new Runnable() {
-			@Override
-			public void run() {
-				AccessibleToast.makeText(uiContext, b.toString(), Toast.LENGTH_LONG).show();
-			}
-		});
+		appInitializer.startApplication();
 	}
 
 	private class DefaultExceptionHandler implements UncaughtExceptionHandler {
@@ -596,7 +463,8 @@ public class OsmandApplication extends Application implements ClientContext {
 		public DefaultExceptionHandler() {
 			defaultHandler = Thread.getDefaultUncaughtExceptionHandler();
 			intent = PendingIntent.getActivity(OsmandApplication.this.getBaseContext(), 0,
-					new Intent(OsmandApplication.this.getBaseContext(), OsmandIntents.getMainMenuActivity()), 0);
+					new Intent(OsmandApplication.this.getBaseContext(),
+							getAppCustomization().getMapActivity()), 0);
 		}
 
 		@Override
@@ -643,53 +511,51 @@ public class OsmandApplication extends Application implements ClientContext {
 	public TargetPointsHelper getTargetPointsHelper() {
 		return targetPointsHelper;
 	}
-	
-	@Override
-	public void showShortToastMessage(int msgId, Object... args) {
-		AccessibleToast.makeText(this, getString(msgId, args), Toast.LENGTH_SHORT).show();
+
+	public void showShortToastMessage(final int msgId, final Object... args) {
+		uiHandler.post(new Runnable() {
+			@Override
+			public void run() {
+				AccessibleToast.makeText(OsmandApplication.this, getString(msgId, args), Toast.LENGTH_SHORT).show();
+			}
+		});
 	}
 
-	@Override
-	public void showToastMessage(int msgId, Object... args) {
-		AccessibleToast.makeText(this, getString(msgId, args), Toast.LENGTH_LONG).show();
+	public void showShortToastMessage(final String msg) {
+		uiHandler.post(new Runnable() {
+			@Override
+			public void run() {
+				AccessibleToast.makeText(OsmandApplication.this, msg, Toast.LENGTH_SHORT).show();
+			}
+		});
 	}
 
-	@Override
-	public void showToastMessage(String msg) {
-		AccessibleToast.makeText(this, msg, Toast.LENGTH_LONG).show();		
-	}
-	
-	@Override
-	public SettingsAPI getSettingsAPI() {
-		return settingsAPI;
-	}
-
-	@Override
-	public ExternalServiceAPI getExternalServiceAPI() {
-		return externalServiceAPI;
+	public void showToastMessage(final int msgId, final Object... args) {
+		uiHandler.post(new Runnable() {
+			@Override
+			public void run() {
+				AccessibleToast.makeText(OsmandApplication.this, getString(msgId, args), Toast.LENGTH_LONG).show();
+			}
+		});
 	}
 
-	@Override
-	public InternalToDoAPI getTodoAPI() {
-		return internalToDoAPI;
+	public void showToastMessage(final String msg) {
+		uiHandler.post(new Runnable() {
+			@Override
+			public void run() {
+				AccessibleToast.makeText(OsmandApplication.this, msg, Toast.LENGTH_LONG).show();				
+			}
+		});
 	}
 
-	@Override
-	public InternalOsmAndAPI getInternalAPI() {
-		return internalOsmAndAPI;
-	}
-
-	@Override
 	public SQLiteAPI getSQLiteAPI() {
 		return sqliteAPI;
 	}
 
-	@Override
 	public void runInUIThread(Runnable run) {
 		uiHandler.post(run);
 	}
 
-	@Override
 	public void runInUIThread(Runnable run, long delay) {
 		uiHandler.postDelayed(run, delay);
 	}
@@ -709,60 +575,117 @@ public class OsmandApplication extends Application implements ClientContext {
 		uiHandler.sendMessageDelayed(msg, delay);
 	}
 	
-	@Override
 	public File getAppPath(String path) {
 		if(path == null) {
 			path = "";
 		}
-		return new File(getSettings().getExternalStorageDirectory(), IndexConstants.APP_DIR + path);
+		return new File(externalStorageDirectory, path);
+	}
+	
+	public void setExternalStorageDirectory(int type, String directory){
+		osmandSettings.setExternalStorageDirectory(type, directory);
+		externalStorageDirectory = osmandSettings.getExternalStorageDirectory();
+		getResourceManager().resetStoreDirectory();
 	}
 
-	@Override
-	public Location getLastKnownLocation() {
-		return locationProvider.getLastKnownLocation();
-	}
-	
-	
 	public void applyTheme(Context c) {
-		int t = R.style.OsmandLightDarkActionBarTheme;
+		int t = R.style.OsmandDarkTheme;
 		if (osmandSettings.OSMAND_THEME.get() == OsmandSettings.OSMAND_DARK_THEME) {
 			t = R.style.OsmandDarkTheme;
 		} else if (osmandSettings.OSMAND_THEME.get() == OsmandSettings.OSMAND_LIGHT_THEME) {
 			t = R.style.OsmandLightTheme;
-		} else if (osmandSettings.OSMAND_THEME.get() == OsmandSettings.OSMAND_LIGHT_DARK_ACTIONBAR_THEME) {
-			t = R.style.OsmandLightDarkActionBarTheme;
 		}
 		setLanguage(c);
 		c.setTheme(t);
-		if (osmandSettings.OSMAND_THEME.get() == OsmandSettings.OSMAND_LIGHT_DARK_ACTIONBAR_THEME
-				&& Build.VERSION.SDK_INT < Build.VERSION_CODES.ICE_CREAM_SANDWICH) {
-			ActionBar ab = null;
-			if (c instanceof SherlockActivity) {
-				ab = ((SherlockActivity) c).getSupportActionBar();
-			} else if (c instanceof SherlockListActivity) {
-				ab = ((SherlockListActivity) c).getSupportActionBar();
-			} else if (c instanceof SherlockExpandableListActivity) {
-				ab = ((SherlockExpandableListActivity) c).getSupportActionBar();
-			}
-			if (ab != null) {
-				BitmapDrawable bg = (BitmapDrawable) getResources().getDrawable(R.drawable.bg_striped);
-				bg.setTileModeXY(TileMode.REPEAT, TileMode.REPEAT);
-				ab.setBackgroundDrawable(bg);
-			}
+	}
+	
+	public IBRouterService getBRouterService() {
+		if(bRouterServiceConnection == null) {
+			return null;
 		}
+		return bRouterServiceConnection.getBrouterService();
 	}
 	
 	public void setLanguage(Context context) {
-		if (prefferedLocale != null) {
+		if (preferredLocale != null) {
 			Configuration config = context.getResources().getConfiguration();
-			String lang = prefferedLocale.getLanguage();
+			String lang = preferredLocale.getLanguage();
 			if (!"".equals(lang) && !config.locale.getLanguage().equals(lang)) {
-				prefferedLocale = new Locale(lang);
-				Locale.setDefault(prefferedLocale);
-				config.locale = prefferedLocale;
+				preferredLocale = new Locale(lang);
+				Locale.setDefault(preferredLocale);
+				config.locale = preferredLocale;
 				context.getResources().updateConfiguration(config, context.getResources().getDisplayMetrics());
+			} else if("".equals(lang) && defaultLocale != null && Locale.getDefault() != defaultLocale) {
+				Locale.setDefault(defaultLocale);
+				config.locale = defaultLocale;
+				getBaseContext().getResources().updateConfiguration(config, getBaseContext().getResources().getDisplayMetrics());
 			}
 		}
 	}
 	
+	public RoutingConfiguration.Builder getDefaultRoutingConfig() {
+		if(defaultRoutingConfig == null) {
+			defaultRoutingConfig = appInitializer.getLazyDefaultRoutingConfig();
+		}
+		return defaultRoutingConfig;
+	}
+	
+	public OsmandRegions getRegions() {
+		return regions;
+	}
+	
+	public boolean accessibilityExtensions() {
+		return (Build.VERSION.SDK_INT < 14) ? getSettings().ACCESSIBILITY_EXTENSIONS.get() : false;
+	}
+	
+	public boolean accessibilityEnabled() {
+		final AccessibilityMode mode = getSettings().ACCESSIBILITY_MODE.get();
+		if(OsmandPlugin.getEnabledPlugin(AccessibilityPlugin.class) == null) {
+			return false;
+		}
+		if (mode == AccessibilityMode.ON) {
+			return true;
+		} else if (mode == AccessibilityMode.OFF) {
+			return false;
+		}
+		return ((AccessibilityManager) getSystemService(Context.ACCESSIBILITY_SERVICE)).isEnabled();
+	}
+
+	public String getVersionName() {
+		try {
+			PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+			return info.versionName;
+		} catch (NameNotFoundException e) {
+			return "";
+		}
+	}
+
+	public int getVersionCode() {
+		try {
+			PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+			return info.versionCode;
+		} catch (NameNotFoundException e) {
+			return 0;
+		}
+	}
+
+	public void startNavigationService(int intent) {
+		final Intent serviceIntent = new Intent(this, NavigationService.class);
+		serviceIntent.putExtra(NavigationService.USAGE_INTENT, intent);
+		if (getNavigationService() == null) {
+			if (intent != NavigationService.USED_BY_GPX) {
+				//for only-USED_BY_GPX case use pre-configured SERVICE_OFF_INTERVAL
+				//other cases always use "continuous":
+				getSettings().SERVICE_OFF_INTERVAL.set(0);
+			}
+			startService(serviceIntent);
+		} else {
+			//additional cases always use "continuous"
+			//TODO: fallback to custom USED_BY_GPX interval in case all other sleep mode purposes have been stopped
+			getSettings().SERVICE_OFF_INTERVAL.set(0);
+			getNavigationService().addUsageIntent(intent);
+		}		
+	}
+
+
 }

@@ -2,29 +2,47 @@ package net.osmand.render;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 
+import net.osmand.util.Algorithms;
+
 public class RenderingRule {
 	
 	private RenderingRuleProperty[] properties;
 	private int[] intProperties;
+	private RenderingRule[] attributesRef;
 	private float[] floatProperties;
 	private List<RenderingRule> ifElseChildren;
 	private List<RenderingRule> ifChildren;
+	private boolean isGroup;
 	
 	private final RenderingRulesStorage storage;
+	private Map<String, String> attributes;
 	
-	public RenderingRule(Map<String, String> attributes, RenderingRulesStorage storage){
+	public RenderingRule(Map<String, String> attributes, boolean isGroup, RenderingRulesStorage storage){
+
+		this.isGroup = isGroup;
 		this.storage = storage;
-		process(attributes);
+		init(attributes);
+	}
+	
+	public void storeAttributes(Map<String, String> attributes){
+		this.attributes = new HashMap<String, String>(attributes);
+	}
+	
+	public Map<String, String> getAttributes() {
+		return attributes == null ? Collections.EMPTY_MAP : attributes;
 	}
 
-	private void process(Map<String, String> attributes) {
+	public void init(Map<String, String> attributes) {
 		ArrayList<RenderingRuleProperty> props = new ArrayList<RenderingRuleProperty>(attributes.size());
 		intProperties = new int[attributes.size()];
+		floatProperties = null;
+		attributesRef = null;
 		int i = 0;
 		Iterator<Entry<String, String>> it = attributes.entrySet().iterator();
 		while (it.hasNext()) {
@@ -32,17 +50,23 @@ public class RenderingRule {
 			RenderingRuleProperty property = storage.PROPS.get(e.getKey());
 			if (property != null) {
 				props.add(property);
-				
-				if (property.isString()) {
-					intProperties[i] = storage.getDictionaryValue(e.getValue());
+				String vl = e.getValue();
+				if(vl.startsWith("$")){
+					if (attributesRef == null) {
+						attributesRef = new RenderingRule[attributes.size()];
+					}
+					attributesRef[i] = storage.getRenderingAttributeRule(vl.substring(1));
+				} else if (property.isString()) {
+					intProperties[i] = storage.getDictionaryValue(vl);
 				} else if (property.isFloat()) {
 					if (floatProperties == null) {
 						// lazy creates
 						floatProperties = new float[attributes.size()];
 					}
-					floatProperties[i] = property.parseFloatValue(e.getValue());
+					floatProperties[i] = property.parseFloatValue(vl);
+					intProperties[i] = property.parseIntValue(vl);
 				} else {
-					intProperties[i] = property.parseIntValue(e.getValue());
+					intProperties[i] = property.parseIntValue(vl);
 				}
 				i++;
 			}
@@ -71,7 +95,7 @@ public class RenderingRule {
 	
 	public float getFloatPropertyValue(String property) {
 		int i = getPropertyIndex(property);
-		if(i >= 0){
+		if(i >= 0 && floatProperties != null){
 			return floatProperties[i];
 		}
 		return 0;
@@ -80,7 +104,7 @@ public class RenderingRule {
 	public String getColorPropertyValue(String property) {
 		int i = getPropertyIndex(property);
 		if(i >= 0){
-			return RenderingRuleProperty.colorToString(intProperties[i]);
+			return Algorithms.colorToString(intProperties[i]);
 		}
 		return null;
 	}
@@ -95,6 +119,13 @@ public class RenderingRule {
 	
 	protected int getIntProp(int ind){
 		return intProperties[ind];
+	}
+	
+	protected RenderingRule getAttrProp(int ind) {
+		if(attributesRef == null) {
+			return null;
+		}
+		return attributesRef[ind];
 	}
 	
 	protected float getFloatProp(int ind){
@@ -129,6 +160,18 @@ public class RenderingRule {
 		ifElseChildren.add(rr);
 	}
 	
+	public void addToBeginIfElseChildren(RenderingRule rr){
+		if(ifElseChildren == null){
+			ifElseChildren = new ArrayList<RenderingRule>();
+		}
+		ifElseChildren.add(0, rr);
+	}
+	
+	public boolean isGroup() {
+		return isGroup;
+	}
+	
+	
 	@Override
 	public String toString() {
 		StringBuilder bls = new StringBuilder();
@@ -137,11 +180,42 @@ public class RenderingRule {
 	}
 	
 	public StringBuilder toString(String indent, StringBuilder bls ) {
-		bls.append("RenderingRule [");
+		if(isGroup){
+			bls.append("switch test [");
+		} else {
+			bls.append(" test [");
+		}
+		printAttrs(bls, true);
+		bls.append("]");
+		
+		bls.append(" set [");
+		printAttrs(bls, false);
+		bls.append("]");
+		
+		for(RenderingRule rc : getIfElseChildren()){
+			String cindent = indent + "* case ";
+			bls.append("\n").append(cindent);
+			rc.toString(indent + "*    ", bls);
+		}
+		
+		for(RenderingRule rc : getIfChildren()){
+			String cindent = indent + "* apply " ;
+			bls.append("\n").append(cindent);
+			rc.toString(indent + "*    ", bls);
+		}
+		
+		return bls;
+	}
+	
+
+	protected void printAttrs(StringBuilder bls, boolean in) {
 		for(RenderingRuleProperty p : getProperties()){
-			bls.append(" " + p.getAttrName() + "= ");
+			if(p.isInputProperty() != in) {
+				continue;
+			}
+			bls.append(" ").append(p.getAttrName()).append("= ");
 			if(p.isString()){
-				bls.append("\"" + getStringPropertyValue(p.getAttrName()) + "\"");
+				bls.append("\"").append(getStringPropertyValue(p.getAttrName())).append("\"");
 			} else if(p.isFloat()){
 				bls.append(getFloatPropertyValue(p.getAttrName()));
 			} else if(p.isColor()){
@@ -150,14 +224,6 @@ public class RenderingRule {
 				bls.append(getIntPropertyValue(p.getAttrName()));
 			} 
 		}
-		bls.append("]");
-		indent += "   ";
-		for(RenderingRule rc : getIfElseChildren()){
-			bls.append("\n"+indent);			
-			rc.toString(indent, bls);
-		}
-		
-		return bls;
 	}
 
 }

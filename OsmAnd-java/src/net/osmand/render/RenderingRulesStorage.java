@@ -2,10 +2,12 @@ package net.osmand.render;
 
 import gnu.trove.map.hash.TIntObjectHashMap;
 
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -23,6 +25,7 @@ import org.xmlpull.v1.XmlPullParserException;
 public class RenderingRulesStorage {
 
 	private final static Log log = PlatformUtil.getLog(RenderingRulesStorage.class);
+	static boolean STORE_ATTTRIBUTES = false;
 	
 	// keep sync !
 	// keep sync ! not change values
@@ -32,7 +35,7 @@ public class RenderingRulesStorage {
 	public final static int POLYGON_RULES = 3;
 	public final static int TEXT_RULES = 4;
 	public final static int ORDER_RULES = 5;
-	private final static int LENGTH_RULES = 6;
+	public final static int LENGTH_RULES = 6;
 	
 	private final static int SHIFT_TAG_VAL = 16;
 	
@@ -46,10 +49,10 @@ public class RenderingRulesStorage {
 	public TIntObjectHashMap<RenderingRule>[] tagValueGlobalRules = new TIntObjectHashMap[LENGTH_RULES];
 	
 	protected Map<String, RenderingRule> renderingAttributes = new LinkedHashMap<String, RenderingRule>();
-	protected Map<String, String> renderingConstants= new LinkedHashMap<String, String>();
+	protected Map<String, String> renderingConstants = new LinkedHashMap<String, String>();
 	
-	private String renderingName;
-	private String internalRenderingName;
+	protected String renderingName;
+	protected String internalRenderingName;
 	
 	
 	public static interface RenderingRulesStorageResolver {
@@ -108,6 +111,7 @@ public class RenderingRulesStorage {
 					for (RenderingRule every : list) {
 						root.addIfElseChildren(every);
 					}
+					e.getValue().addToBeginIfElseChildren(root);
 				} else {
 					renderingAttributes.put(e.getKey(), e.getValue());
 				}
@@ -148,33 +152,29 @@ public class RenderingRulesStorage {
 		}
 	}
 	
-	private void registerGlobalRule(RenderingRule rr, int state, Map<String, String> attrsMap) throws XmlPullParserException {
-		int tag = rr.getIntPropertyValue(RenderingRuleStorageProperties.TAG);
-		if(tag == -1){
-			throw new XmlPullParserException("Attribute tag should be specified for root filter " + attrsMap.toString());
+	private void registerGlobalRule(RenderingRule rr, int state, String tagS, String valueS) throws XmlPullParserException {
+		if(tagS == null || valueS == null){
+			throw new XmlPullParserException("Attribute tag should be specified for root filter " + rr.toString());
 		}
-		int value = rr.getIntPropertyValue(RenderingRuleStorageProperties.VALUE);
-		if(value == -1){
-			throw new XmlPullParserException("Attribute tag should be specified for root filter " + attrsMap.toString());
-		}
+		int tag = getDictionaryValue(tagS);
+		int value = getDictionaryValue(valueS);
 		int key = (tag << SHIFT_TAG_VAL) + value;
-		RenderingRule toInsert = rr;
-		RenderingRule previous = tagValueGlobalRules[state].get(key);
-		if(previous != null){
+		RenderingRule insert = tagValueGlobalRules[state].get(key);
+		if (insert != null) {
 			// all root rules should have at least tag/value
-			toInsert = createTagValueRootWrapperRule(key, previous);
-			toInsert.addIfElseChildren(rr);
+			insert = createTagValueRootWrapperRule(key, insert);
+			insert.addIfElseChildren(rr);
+		} else {
+			insert = rr;
 		}
-		tagValueGlobalRules[state].put(key, toInsert);			
+		tagValueGlobalRules[state].put(key, insert);			
 	}
 	
 
 	private RenderingRule createTagValueRootWrapperRule(int tagValueKey, RenderingRule previous) {
-		if (previous.getProperties().length > 2) {
+		if (previous.getProperties().length > 0) {
 			Map<String, String> m = new HashMap<String, String>();
-			m.put("tag", getTagString(tagValueKey));
-			m.put("value", getValueString(tagValueKey));
-			RenderingRule toInsert = new RenderingRule(m, RenderingRulesStorage.this);
+			RenderingRule toInsert = new RenderingRule(m, true, RenderingRulesStorage.this);
 			toInsert.addIfElseChildren(previous);
 			return toInsert;
 		} else {
@@ -182,36 +182,11 @@ public class RenderingRulesStorage {
 		}
 	}
 	
-	private class GroupRules {
-		Map<String, String> groupAttributes = new LinkedHashMap<String, String>();
-		List<RenderingRule> children = new ArrayList<RenderingRule>();
-		List<GroupRules> childrenGroups = new ArrayList<GroupRules>();
-		
-		private void addGroupFilter(RenderingRule rr) {
-			for (RenderingRule ch : children) {
-				ch.addIfChildren(rr);
-			}
-			for(GroupRules gch : childrenGroups){
-				gch.addGroupFilter(rr);
-			}
-		}
-
-		public void registerGlobalRules(int state) throws XmlPullParserException {
-			for (RenderingRule ch : children) {
-				registerGlobalRule(ch, state, groupAttributes);
-			}
-			for(GroupRules gch : childrenGroups){
-				gch.registerGlobalRules(state);
-			}
-			
-		}
-	}
-	
 	private class RenderingRulesHandler {
 		private final XmlPullParser parser;
 		private int state;
 
-		Stack<Object> stack = new Stack<Object>();
+		Stack<RenderingRule> stack = new Stack<RenderingRule>();
 		
 		Map<String, String> attrsMap = new LinkedHashMap<String, String>();
 		private final RenderingRulesStorageResolver resolver;
@@ -241,49 +216,45 @@ public class RenderingRulesStorage {
 			return dependsStorage;
 		}
 		
+		private boolean isTopCase() {
+			for(int i = 0; i < stack.size(); i++) {
+				if(!stack.get(i).isGroup()) {
+					return false;
+				}
+			}
+			return true;
+		}
+		
 		public void startElement(String name) throws XmlPullParserException, IOException {
 			boolean stateChanged = false;
-			if("filter".equals(name)){ //$NON-NLS-1$
+			final boolean isCase = isCase(name);
+			final boolean isSwitch = isSwitch(name);
+			if(isCase || isSwitch){ //$NON-NLS-1$
 				attrsMap.clear();
-				if (stack.size() > 0 && stack.peek() instanceof GroupRules) {
-					GroupRules  parent = ((GroupRules) stack.peek());
-					attrsMap.putAll(parent.groupAttributes);
-				}
+				boolean top = stack.size() == 0 || isTopCase();
 				parseAttributes(attrsMap);
-				RenderingRule renderingRule = new RenderingRule(attrsMap, RenderingRulesStorage.this);
-				
-				if (stack.size() > 0 && stack.peek() instanceof GroupRules) {
-					GroupRules parent = ((GroupRules) stack.peek());
-					parent.children.add(renderingRule);
-				} else if (stack.size() > 0 && stack.peek() instanceof RenderingRule) {
+				RenderingRule renderingRule = new RenderingRule(attrsMap, isSwitch, RenderingRulesStorage.this);
+				if(top || STORE_ATTTRIBUTES){
+					renderingRule.storeAttributes(attrsMap);
+				}
+				if (stack.size() > 0 && stack.peek() instanceof RenderingRule) {
 					RenderingRule parent = ((RenderingRule) stack.peek());
 					parent.addIfElseChildren(renderingRule);
-				} else {
-					registerGlobalRule(renderingRule, state, attrsMap);
 				}
 				stack.push(renderingRule);
-			} else if("groupFilter".equals(name)){ //$NON-NLS-1$
+			} else if(isApply(name)){ //$NON-NLS-1$
 				attrsMap.clear();
 				parseAttributes(attrsMap);
-				RenderingRule renderingRule = new RenderingRule(attrsMap, RenderingRulesStorage.this);
-				if (stack.size() > 0 && stack.peek() instanceof GroupRules) {
-					GroupRules parent = ((GroupRules) stack.peek());
-					parent.addGroupFilter(renderingRule);
-				} else if (stack.size() > 0 && stack.peek() instanceof RenderingRule) {
+				RenderingRule renderingRule = new RenderingRule(attrsMap, false, RenderingRulesStorage.this);
+				if(STORE_ATTTRIBUTES) {
+					renderingRule.storeAttributes(attrsMap);
+				}
+				if (stack.size() > 0 && stack.peek() instanceof RenderingRule) {
 					((RenderingRule) stack.peek()).addIfChildren(renderingRule);
 				} else {
-					throw new XmlPullParserException("Group filter without parent");
+					throw new XmlPullParserException("Apply (groupFilter) without parent");
 				}
 				stack.push(renderingRule);
-			} else if("group".equals(name)){ //$NON-NLS-1$
-				GroupRules groupRules = new GroupRules();
-				if (stack.size() > 0 && stack.peek() instanceof GroupRules) {
-					GroupRules parent = ((GroupRules) stack.peek());
-					groupRules.groupAttributes.putAll(parent.groupAttributes);
-					parent.childrenGroups.add(groupRules);
-				}
-				parseAttributes(groupRules.groupAttributes);
-				stack.push(groupRules);
 			} else if("order".equals(name)){ //$NON-NLS-1$
 				state = ORDER_RULES;
 				stateChanged = true;
@@ -301,8 +272,7 @@ public class RenderingRulesStorage {
 				stateChanged = true;
 			} else if("renderingAttribute".equals(name)){ //$NON-NLS-1$
 				String attr = parser.getAttributeValue("", "name");
-				@SuppressWarnings("unchecked")
-				RenderingRule root = new RenderingRule(new HashMap<String, String>(	), RenderingRulesStorage.this);
+				RenderingRule root = new RenderingRule(new HashMap<String, String>(), false, RenderingRulesStorage.this);
 				renderingAttributes.put(attr, root);
 				stack.push(root);
 			} else if("renderingProperty".equals(name)){ //$NON-NLS-1$
@@ -317,6 +287,7 @@ public class RenderingRulesStorage {
 					prop = RenderingRuleProperty.createInputIntProperty(attr);
 				}
 				prop.setDescription(parser.getAttributeValue("", "description"));
+				prop.setCategory(parser.getAttributeValue("", "category"));
 				prop.setName(parser.getAttributeValue("", "name"));
 				if(parser.getAttributeValue("", "possibleValues") != null){
 					prop.setPossibleValues(parser.getAttributeValue("", "possibleValues").split(","));
@@ -351,17 +322,32 @@ public class RenderingRulesStorage {
 			}
 			
 		}
+
+		protected boolean isCase(String name) {
+			return "filter".equals(name) || "case".equals(name);
+		}
+
+		protected boolean isApply(String name) {
+			return "groupFilter".equals(name) || "apply".equals(name) || "apply_if".equals(name);
+		}
+
+		protected boolean isSwitch(String name) {
+			return "group".equals(name) || "switch".equals(name);
+		}
 		
 		private Map<String, String> parseAttributes(Map<String, String> m) {
-			for(int i=0; i< parser.getAttributeCount(); i++) {
+			for (int i = 0; i < parser.getAttributeCount(); i++) {
 				String name = parser.getAttributeName(i);
 				String vl = parser.getAttributeValue(i);
-				if(vl != null && vl.startsWith("$")) {
+				if (vl != null && vl.startsWith("$")) {
 					String cv = vl.substring(1);
-					if(!renderingConstants.containsKey(cv)){
-						throw new IllegalStateException("Rendering constant '" + cv + "' was not specified.");
+					if (!renderingConstants.containsKey(cv) &&
+							!renderingAttributes.containsKey(cv)) {
+						throw new IllegalStateException("Rendering constant or attribute '" + cv + "' was not specified.");
 					}
-					vl = renderingConstants.get(cv);
+					if(renderingConstants.containsKey(cv)){
+						vl = renderingConstants.get(cv);
+					}
 				}
 				m.put(name, vl);
 			}
@@ -370,17 +356,54 @@ public class RenderingRulesStorage {
 
 
 		public void endElement(String name) throws XmlPullParserException  {
-			if ("filter".equals(name)) { //$NON-NLS-1$
-				stack.pop();
-			} else if("group".equals(name)){ //$NON-NLS-1$
-				GroupRules group = (GroupRules) stack.pop();
-				if (stack.size() == 0) {
-					group.registerGlobalRules(state);
+			if (isCase(name) || isSwitch(name)) { 
+				RenderingRule renderingRule = (RenderingRule) stack.pop();
+				if(stack.size() == 0) {
+					registerTopLevel(renderingRule, null, Collections.EMPTY_MAP);
 				}
-			} else if("groupFilter".equals(name)){ //$NON-NLS-1$
+			} else if(isApply(name)){ 
 				stack.pop();
 			} else if("renderingAttribute".equals(name)){ //$NON-NLS-1$
 				stack.pop();
+			}
+		}
+
+		protected void registerTopLevel(RenderingRule renderingRule, List<RenderingRule> applyRules, Map<String, String> attrs) throws XmlPullParserException {
+			if(renderingRule.isGroup() && (renderingRule.getIntPropertyValue(RenderingRuleStorageProperties.TAG) == -1 ||
+					renderingRule.getIntPropertyValue(RenderingRuleStorageProperties.VALUE) == -1)){
+				List<RenderingRule> caseChildren = renderingRule.getIfElseChildren();
+				for(RenderingRule ch : caseChildren) {
+					List<RenderingRule> apply = applyRules;
+					if(!renderingRule.getIfChildren().isEmpty()) {
+						apply = new ArrayList<RenderingRule>();
+						apply.addAll(renderingRule.getIfChildren());
+						if(applyRules != null) {
+							apply.addAll(applyRules);
+						}
+					}
+					Map<String, String> cattrs = new HashMap<String, String>(attrs);
+					cattrs.putAll(renderingRule.getAttributes());
+					registerTopLevel(ch, apply, cattrs);
+				}
+			} else {
+				String tg = null;
+				String vl = null;
+				HashMap<String, String> ns = new HashMap<String, String>(attrs);
+				ns.putAll(renderingRule.getAttributes());
+				tg = ns.remove("tag");
+				vl = ns.remove("value");
+				// reset rendering rule attributes
+				renderingRule.init(ns);
+				if(STORE_ATTTRIBUTES) {
+					renderingRule.storeAttributes(ns);
+				}
+				
+				registerGlobalRule(renderingRule, state, tg, vl);
+				if (applyRules != null) {
+					for (RenderingRule apply : applyRules) {
+						renderingRule.addIfChildren(apply);
+					}
+				}
 			}
 		}
 		
@@ -425,12 +448,16 @@ public class RenderingRulesStorage {
 		return tagValueGlobalRules[state].values(new RenderingRule[tagValueGlobalRules[state].size()]);
 	}
 	
+	public int getRuleTagValueKey(int state, int ind){
+		return tagValueGlobalRules[state].keys()[ind];
+	}
+	
 	
 	public void printDebug(int state, PrintStream out){
 		for(int key : tagValueGlobalRules[state].keys()) {
 			RenderingRule rr = tagValueGlobalRules[state].get(key);
-			out.print("\n\n"+getTagString(key) + " : " + getValueString(key));
-			printRenderingRule("", rr, out);
+			out.print("\n\n"+getTagString(key) + " : " + getValueString(key) + "\n ");
+			printRenderingRule(" ", rr, out);
 		}
 	}
 	
@@ -440,34 +467,93 @@ public class RenderingRulesStorage {
 	
 	
 	public static void main(String[] args) throws XmlPullParserException, IOException {
-		RenderingRulesStorage storage = new RenderingRulesStorage("test", null);
+		STORE_ATTTRIBUTES = true;
+//		InputStream is = RenderingRulesStorage.class.getResourceAsStream("default.render.xml");
+		String file = "/Users/victorshcherb/osmand/repos/resources/rendering_styles/default.render.xml";
+		Map<String, String> renderingConstants = new LinkedHashMap<String, String>();
+		InputStream is = new FileInputStream(file);
+		if(args != null && args.length > 0) {
+			is = new FileInputStream(args[0]);
+		}
+		try {
+			XmlPullParser parser = PlatformUtil.newXMLPullParser();
+			parser.setInput(is, "UTF-8");
+			int tok;
+			while ((tok = parser.next()) != XmlPullParser.END_DOCUMENT) {
+				if (tok == XmlPullParser.START_TAG) {
+					String tagName = parser.getName();
+					if (tagName.equals("renderingConstant")) {
+						if (!renderingConstants.containsKey(parser.getAttributeValue("", "name"))) {
+							renderingConstants.put(parser.getAttributeValue("", "name"), 
+									parser.getAttributeValue("", "value"));
+						}
+					}
+				}
+			}
+		} finally {
+			is.close();
+		}
+		is = new FileInputStream(file);
+		RenderingRulesStorage storage = new RenderingRulesStorage("default", renderingConstants);
 		final RenderingRulesStorageResolver resolver = new RenderingRulesStorageResolver() {
 			@Override
 			public RenderingRulesStorage resolve(String name, RenderingRulesStorageResolver ref) throws XmlPullParserException, IOException {
-				RenderingRulesStorage depends = new RenderingRulesStorage("test", null);
+				RenderingRulesStorage depends = new RenderingRulesStorage(name, null);
 				depends.parseRulesFromXmlInputStream(RenderingRulesStorage.class.getResourceAsStream(name + ".render.xml"), ref);
 				return depends;
 			}
 		};
-		storage.parseRulesFromXmlInputStream(RenderingRulesStorage.class.getResourceAsStream("default.render.xml"), resolver);
-//		storage.printDebug(TEXT_RULES, System.out);
-//		long tm = System.nanoTime();
-//		int count = 100000;
-//		for (int i = 0; i < count; i++) {
-			RenderingRuleSearchRequest searchRequest = new RenderingRuleSearchRequest(storage);
-			searchRequest.setStringFilter(storage.PROPS.R_TAG, "landuse");
-			searchRequest.setStringFilter(storage.PROPS.R_VALUE, "wood");
-			 searchRequest.setIntFilter(storage.PROPS.R_LAYER, 1);
-			searchRequest.setIntFilter(storage.PROPS.R_MINZOOM, 15);
-			searchRequest.setIntFilter(storage.PROPS.R_MAXZOOM, 15);
-			//	searchRequest.setBooleanFilter(storage.PROPS.R_NIGHT_MODE, true);
-			// searchRequest.setBooleanFilter(storage.PROPS.get("hmRendered"), true);
-			
-			boolean res = searchRequest.search(POLYGON_RULES);
-			System.out.println("Result " + res);
-			printResult(searchRequest,  System.out);
-//		}
-//		System.out.println((System.nanoTime()- tm)/ (1e6f * count) );
+		storage.parseRulesFromXmlInputStream(is, resolver);
+		
+//		storage = new RenderingRulesStorage("", null);
+//		new DefaultRenderingRulesStorage().createStyle(storage);
+		
+		
+		printAllRules(storage);
+//		testSearch(storage);
+		
+	}
+	
+	
+	
+	protected static void testSearch(RenderingRulesStorage storage) {
+		//		long tm = System.nanoTime();
+		//		int count = 100000;
+		//		for (int i = 0; i < count; i++) {
+					RenderingRuleSearchRequest searchRequest = new RenderingRuleSearchRequest(storage);
+					searchRequest.setStringFilter(storage.PROPS.R_TAG, "highway");
+					searchRequest.setStringFilter(storage.PROPS.R_VALUE, "residential");
+//					searchRequest.setStringFilter(storage.PROPS.R_ADDITIONAL, "leaf_type=broadleaved");
+//					 searchRequest.setIntFilter(storage.PROPS.R_LAYER, 1);
+					searchRequest.setIntFilter(storage.PROPS.R_MINZOOM, 13);
+					searchRequest.setIntFilter(storage.PROPS.R_MAXZOOM, 13);
+//						searchRequest.setBooleanFilter(storage.PROPS.R_NIGHT_MODE, true);
+//					for (RenderingRuleProperty customProp : storage.PROPS.getCustomRules()) {
+//						if (customProp.isBoolean()) {
+//							searchRequest.setBooleanFilter(customProp, false);
+//						} else {
+//							searchRequest.setStringFilter(customProp, "");
+//						}
+//					}
+//					searchRequest.setBooleanFilter(storage.PROPS.get("noPolygons"), true);
+					boolean res = searchRequest.search(LINE_RULES);
+					System.out.println("Result " + res);
+					printResult(searchRequest,  System.out);
+		//		}
+		//		System.out.println((System.nanoTime()- tm)/ (1e6f * count) );
+	}
+
+	protected static void printAllRules(RenderingRulesStorage storage) {
+		System.out.println("\n\n--------- POINTS ----- ");
+		storage.printDebug(POINT_RULES, System.out);
+		System.out.println("\n\n--------- POLYGON ----- ");
+		storage.printDebug(POLYGON_RULES, System.out);
+		System.out.println("\n\n--------- LINES ----- ");
+		storage.printDebug(LINE_RULES, System.out);
+		System.out.println("\n\n--------- ORDER ----- ");
+		storage.printDebug(ORDER_RULES, System.out);
+		System.out.println("\n\n--------- TEXT ----- ");
+		storage.printDebug(TEXT_RULES, System.out);
 	}
 	
 	private static void printResult(RenderingRuleSearchRequest searchRequest, PrintStream out) {

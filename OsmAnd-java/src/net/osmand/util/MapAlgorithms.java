@@ -1,11 +1,6 @@
 package net.osmand.util;
 
 import gnu.trove.list.TLongList;
-
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-
 import net.osmand.data.LatLon;
 
 public class MapAlgorithms {
@@ -16,7 +11,7 @@ public class MapAlgorithms {
 		}
 
 		// calculate middle Y
-		long mask = 0xffffffffl;
+		long mask = 0xffffffffL;
 		long middleY = 0;
 		for (int i = 0; i < c.size(); i++) {
 			middleY =  middleY +  (long)(c.get(i) & mask);
@@ -188,7 +183,7 @@ public class MapAlgorithms {
 			by = outy;
 			//return (((long) bx) << 32) | ((long) by);
 		}
-		return -1l;
+		return -1L;
 	}
 	
 	/**

@@ -1,5 +1,7 @@
 package net.osmand.plus.srtmplugin;
 
+import android.app.Activity;
+import android.widget.ArrayAdapter;
 import net.osmand.plus.ApplicationMode;
 import net.osmand.plus.ContextMenuAdapter;
 import net.osmand.plus.ContextMenuAdapter.OnContextMenuClick;
@@ -10,11 +12,11 @@ import net.osmand.plus.OsmandSettings.CommonPreference;
 import net.osmand.plus.R;
 import net.osmand.plus.activities.MapActivity;
 import net.osmand.plus.views.OsmandMapTileView;
-import android.content.DialogInterface;
 
 public class SRTMPlugin extends OsmandPlugin {
 
 	public static final String ID = "osmand.srtm";
+	public static final String FREE_ID = "osmand.srtm.paid";
 	private OsmandApplication app;
 	private boolean paid;
 	private HillshadeLayer hillshadeLayer;
@@ -22,27 +24,23 @@ public class SRTMPlugin extends OsmandPlugin {
 	
 	@Override
 	public String getId() {
-		return ID;
+		return paid ? ID : FREE_ID;
 	}
 
-	public SRTMPlugin(OsmandApplication app, boolean paid) {
+	public SRTMPlugin(OsmandApplication app) {
 		this.app = app;
-		this.paid = paid;
-		OsmandSettings settings = app.getSettings();
-		CommonPreference<String> pref = settings.getCustomRenderProperty("contourLines");
-		if(pref.get().equals("")) {
-			for(ApplicationMode m : ApplicationMode.values()) {
-				if(pref.getModeValue(m).equals("")) {
-					pref.setModeValue(m, "13");
-				}
-			}
-		}
-
 	}
 	
-	public boolean isPaid() {
-		return paid;
+	@Override
+	public int getLogoResourceId() {
+		return R.drawable.ic_plugin_srtm;
 	}
+	
+	@Override
+	public int getAssetResourceName() {
+		return R.drawable.contour_lines;
+	}
+	
 
 	@Override
 	public String getDescription() {
@@ -55,8 +53,17 @@ public class SRTMPlugin extends OsmandPlugin {
 	}
 
 	@Override
-	public boolean init(final OsmandApplication app) {
+	public boolean init(final OsmandApplication app, Activity activity) {
 		HILLSHADE = app.getSettings().registerBooleanPreference("hillshade_layer", true);
+		OsmandSettings settings = app.getSettings();
+		CommonPreference<String> pref = settings.getCustomRenderProperty("contourLines");
+		if(pref.get().equals("")) {
+			for(ApplicationMode m : ApplicationMode.allPossibleValues()) {
+				if(pref.getModeValue(m).equals("")) {
+					pref.setModeValue(m, "13");
+				}
+			}
+		}
 		return true;
 	}
 
@@ -94,20 +101,25 @@ public class SRTMPlugin extends OsmandPlugin {
 	public void registerLayerContextMenuActions(final OsmandMapTileView mapView, ContextMenuAdapter adapter, final MapActivity mapActivity) {
 		OnContextMenuClick listener = new OnContextMenuClick() {
 			@Override
-			public void onContextMenuClick(int itemId, int pos, boolean isChecked, DialogInterface dialog) {
+			public boolean onContextMenuClick(ArrayAdapter<?> adapter, int itemId, int pos, boolean isChecked) {
 				if (itemId == R.string.layer_hillshade) {
-					dialog.dismiss();
 					HILLSHADE.set(!HILLSHADE.get());
 					updateLayers(mapView, mapActivity);
 				}
+				return true;
 			}
 		};
 		adapter.item(R.string.layer_hillshade).selected(HILLSHADE.get()? 1 : 0)
-			.icons( R.drawable.ic_action_hillshade_dark, R.drawable.ic_action_hillshade_light).listen(listener).position(9).reg();
+			.iconColor( R.drawable.ic_action_hillshade_dark).listen(listener).position(13).layout(R.layout.drawer_list_item).reg();
 	}
 	
 	@Override
 	public void disable(OsmandApplication app) {
+	}
+	
+	@Override
+	public Class<? extends Activity> getSettingsActivity() {
+		return null;
 	}
 
 }

@@ -5,6 +5,7 @@
 
 	<property name="src.dir" value="src" />
 	<property name="src.absolute.dir" location="${src.dir}" />
+	<property name="protobuf.src" location="protobuf-src" />
 	<property name="bin.dir" value="bin" />
 	<property name="bin.absolute.dir" location="${bin.dir}" />
 	<property name="lib.dir" value="libs" />
@@ -42,15 +43,28 @@
 			<fileset dir="../../resources/obf_creation/">
 				<include name="rendering_types.xml" />
 			</fileset>
+			<fileset dir="../../resources/poi/">
+				<include name="poi_types.xml" />
+			</fileset>
 		</copy>
 		<copy todir="${src.absolute.dir}/net/osmand/map/">
 			<fileset dir="../../resources/countries-info/">
 				<include name="countries.reginfo" />
+                <include name="regions.ocbf" />
 			</fileset>
 		</copy>
 	</target>
 
 
+	<target name="patch-protobuf">
+	    <copy file="${protobuf.src}/com/google/protobuf/CodedInputStream.java"
+	         tofile="${protobuf.src}/com/google/protobuf/CodedInputStreamRAF.java" overwrite="yes">
+	    </copy>
+	    <copy todir="${src.absolute.dir}">
+			<fileset dir="${protobuf.src}"/>
+		</copy> 
+		<patch patchfile="protobuf.patch" dir=".."/>
+	</target>
 	<target name="compile" depends="-dirs,copy_resources">
 		<copy todir="${bin.absolute.dir}">
 			<fileset dir="${src.absolute.dir}">
@@ -66,6 +80,12 @@
 
 	<target name="native-libs-jar" depends="compile">
 		<exec command="bash collect_libs.sh" failonerror="true">
+		</exec>
+		<antcall target="jar" />
+	</target>
+	
+	<target name="native-legacy-libs-jar" depends="compile">
+		<exec command="bash collect_legacy_libs.sh" failonerror="true">
 		</exec>
 		<antcall target="jar" />
 	</target>
@@ -92,6 +112,17 @@
 				<include name="**/*.java" />
 			</fileset>
 		</jar>
+		<jar destfile="OsmAnd-core-android.jar" manifest="MANIFEST.MF">
+		      <fileset dir="${bin.absolute.dir}">
+	                <include name="**/*.class" />
+	                <exclude name="**/PlatformUtil*"/>
+	            </fileset>
+	            <fileset dir="${src.absolute.dir}">
+	                <include name="**/*.java" />
+	                <exclude name="**/PlatformUtil*"/>
+	            </fileset>
+	        </jar>
+
 
 		<delete file="MANIFEST.MF" />
 	</target>

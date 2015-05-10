@@ -17,6 +17,7 @@ public class RouteSegmentResult {
 	private List<RouteSegmentResult>[] attachedRoutes;
 	private RouteSegmentResult[][] preAttachedRoutes;
 	private float segmentTime;
+	private float routingTime;
 	private float speed;
 	private float distance;
 	private String description = "";
@@ -35,7 +36,7 @@ public class RouteSegmentResult {
 	@SuppressWarnings("unchecked")
 	private void updateCapacity() {
 		int capacity = Math.abs(endPointIndex - startPointIndex) + 1;
-		List<RouteSegmentResult>[] old = this.attachedRoutes ;
+		List<RouteSegmentResult>[] old = this.attachedRoutes;
 		this.attachedRoutes = new List[capacity];
 		if(old != null){
 			System.arraycopy(old, 0, this.attachedRoutes, 0, Math.min(old.length, this.attachedRoutes.length));
@@ -99,12 +100,24 @@ public class RouteSegmentResult {
 		return (float) (object.directionRoute(point, plus) / Math.PI * 180);
 	}
 	
+	public float getDistance(int point, boolean plus) {
+		return (float) (plus? object.distance(point, endPointIndex): object.distance(startPointIndex, point));
+	}
+	
 	public float getBearingEnd() {
 		return (float) (MapUtils.alignAngleDifference(object.directionRoute(endPointIndex, startPointIndex > endPointIndex) - Math.PI) / Math.PI * 180);
 	}
 	
 	public void setSegmentTime(float segmentTime) {
 		this.segmentTime = segmentTime;
+	}
+	
+	public void setRoutingTime(float routingTime) {
+		this.routingTime = routingTime;
+	}
+	
+	public float getRoutingTime() {
+		return routingTime;
 	}
 	
 	public LatLon getStartPoint() {
@@ -126,6 +139,11 @@ public class RouteSegmentResult {
 	public LatLon getEndPoint() {
 		return convertPoint(object, endPointIndex);
 	}
+	
+	public boolean isForwardDirection() {
+		return endPointIndex - startPointIndex > 0;
+	}
+
 	
 	private LatLon convertPoint(RouteDataObject o, int ind){
 		return new LatLon(MapUtils.get31LatitudeY(o.getPoint31YTile(ind)), MapUtils.get31LongitudeX(o.getPoint31XTile(ind)));
@@ -164,6 +182,10 @@ public class RouteSegmentResult {
 	public void setDescription(String description) {
 		this.description = description;
 	}
-	
+
+	@Override
+	public String toString() {
+		return object.toString() + " : " + startPointIndex + "-" + endPointIndex;
+	}
 	
 }

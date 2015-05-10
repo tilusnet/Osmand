@@ -1,34 +1,38 @@
 package net.osmand;
 
-import gnu.trove.list.array.TIntArrayList;
-
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
-
-import org.apache.commons.logging.Log;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 
 import net.osmand.binary.BinaryMapRouteReaderAdapter.RouteRegion;
 import net.osmand.binary.BinaryMapRouteReaderAdapter.RouteSubregion;
 import net.osmand.binary.RouteDataObject;
 import net.osmand.render.RenderingRuleSearchRequest;
 import net.osmand.render.RenderingRulesStorage;
-import net.osmand.router.GeneralRouter;
+import net.osmand.router.PrecalculatedRouteDirection;
 import net.osmand.router.RouteCalculationProgress;
 import net.osmand.router.RouteSegmentResult;
 import net.osmand.router.RoutingConfiguration;
+import net.osmand.util.Algorithms;
+
+import org.apache.commons.logging.Log;
 
 public class NativeLibrary {
 
-	public static class RenderingGenerationResult {
+
+    public NativeLibrary() {
+    }
+
+    public static class RenderingGenerationResult {
 		public RenderingGenerationResult(ByteBuffer bitmap) {
 			bitmapBuffer = bitmap;
 		}
@@ -84,7 +88,7 @@ public class NativeLibrary {
 	}
 
 	/**
-	 * @param searchResultHandle
+	 * @param
 	 *            - must be null if there is no need to append to previous results returns native handle to results
 	 */
 	public NativeSearchResult searchObjectsForRendering(int sleft, int sright, int stop, int sbottom, int zoom,
@@ -106,7 +110,7 @@ public class NativeLibrary {
 	}
 
 	public boolean initMapFile(String filePath) {
-		return initBinaryMapFile(filePath);
+        return initBinaryMapFile(filePath);
 	}
 
 	public boolean initCacheMapFile(String filePath) {
@@ -118,34 +122,13 @@ public class NativeLibrary {
 	}
 
 	public RouteSegmentResult[] runNativeRouting(int sx31, int sy31, int ex31, int ey31, RoutingConfiguration config,
-			RouteRegion[] regions, RouteCalculationProgress progress) {
-		TIntArrayList state = new TIntArrayList();
-		List<String> keys = new ArrayList<String>();
-		List<String> values = new ArrayList<String>();
-		GeneralRouter r = (GeneralRouter) config.router;
-		fillObjects(state, keys, values, 0, r.highwaySpeed);
-		fillObjects(state, keys, values, 1, r.highwayPriorities);
-		fillObjects(state, keys, values, 2, r.avoid);
-		fillObjects(state, keys, values, 3, r.obstacles);
-		fillObjects(state, keys, values, 4, r.routingObstacles);
-		LinkedHashMap<String, String> attrs = new LinkedHashMap<String, String>(config.attributes);
-		attrs.putAll(r.attributes);
-		fillObjects(state, keys, values, 5, attrs);
-
-		return nativeRouting(new int[] { sx31, sy31, ex31, ey31 }, state.toArray(), keys.toArray(new String[keys.size()]),
-				values.toArray(new String[values.size()]), config.initialDirection == null ? -360 : config.initialDirection.floatValue(),
-				regions, progress);
+			RouteRegion[] regions, RouteCalculationProgress progress, PrecalculatedRouteDirection precalculatedRouteDirection, 
+			boolean basemap) {
+//		config.router.printRules(System.out);
+		return nativeRouting(new int[] { sx31, sy31, ex31, ey31 }, config, config.initialDirection == null ? -360 : config.initialDirection.floatValue(),
+				regions, progress, precalculatedRouteDirection, basemap);
 	}
 
-	public <T> void fillObjects(TIntArrayList state, List<String> keys, List<String> values, int s, Map<String, T> map) {
-		Iterator<Entry<String, T>> it = map.entrySet().iterator();
-		while (it.hasNext()) {
-			Entry<String, T> n = it.next();
-			state.add(s);
-			keys.add(n.getKey());
-			values.add(n.getValue() + "");
-		}
-	}
 
 	public NativeRouteSearchResult loadRouteRegion(RouteSubregion sub, boolean loadObjects) {
 		NativeRouteSearchResult lr = loadRoutingData(sub.routeReg, sub.routeReg.getName(), sub.routeReg.getFilePointer(), sub, loadObjects);
@@ -163,8 +146,8 @@ public class NativeLibrary {
 
 	protected static native RouteDataObject[] getRouteDataObjects(RouteRegion reg, long rs, int x31, int y31);
 
-	protected static native RouteSegmentResult[] nativeRouting(int[] coordinates, int[] state, String[] keyConfig, String[] valueConfig,
-			float initDirection, RouteRegion[] regions, RouteCalculationProgress progress);
+	protected static native RouteSegmentResult[] nativeRouting(int[] coordinates, RoutingConfiguration r,
+			float initDirection, RouteRegion[] regions, RouteCalculationProgress progress, PrecalculatedRouteDirection precalculatedRouteDirection, boolean basemap);
 
 	protected static native void deleteSearchResult(long searchResultHandle);
 
@@ -183,6 +166,7 @@ public class NativeLibrary {
 			RenderingRuleSearchRequest request, boolean skipDuplicates, int renderRouteDataFile, Object objectWithInterruptedField,
 			String msgIfNothingFound);
 
+	protected static native boolean initFontType(byte[] byteData, String name, boolean bold, boolean italic);
 
 	/**/
 	// Empty native impl
@@ -221,12 +205,15 @@ public class NativeLibrary {
 	 */
 
 	private static final Log log = PlatformUtil.getLog(NativeLibrary.class);
-	public static boolean loadAllLibs(String path) {
+	
+	
+	public static boolean loadNewLib(String path) {
+		return load("OsmAndJNI", path);
+	}
+	
+	public static boolean loadOldLib(String path) {
 		boolean b = true;
-		b &= load("Qt5Core", path);
-		b &= load("OsmAndCore", path);
-		b &= load("OsmAndCoreUtils", path);
-		b &= load("OsmAndJNI", path);
+		b &= load("osmand", path);
 		return b;
 	}
 
@@ -283,4 +270,69 @@ public class NativeLibrary {
 		} // fall through
 		return false;
 	}
+
+	
+	/**
+     * Compares two {@code int} values.
+     * @return 0 if lhs = rhs, less than 0 if lhs &lt; rhs, and greater than 0 if lhs &gt; rhs.
+     * @since 1.7
+     */
+    public static int ccmp(int lhs, int rhs) {
+        return lhs < rhs ? -1 : (lhs == rhs ? 0 : 1);
+    }
+    
+	public static void loadFontData(String dir) {
+		File dr = new File(dir);
+		if (dr.listFiles() == null) {
+			System.err.println("No fonts loaded from " + dr.getAbsolutePath());
+			return;
+		}
+		ArrayList<File> lst = new ArrayList<File>(Arrays.asList(dr.listFiles()));
+		Collections.sort(lst, new Comparator<File>() {
+			
+
+			@Override
+			public int compare(File arg0, File arg1) {
+				return ccmp(order(arg0), order(arg1));
+			}
+
+			private int order(File a) {
+				final String nm = a.getName().toLowerCase();
+				if(nm.contains("OpenSans".toLowerCase())) {
+					if(nm.contains("Regular".toLowerCase())) {
+						return 0;
+					}
+					return 1;
+				}
+				if(nm.contains("Fallback".toLowerCase())) {
+					return 3;
+				}
+				if(nm.contains("MTLmr3m".toLowerCase())) {
+					return 5;
+				}
+				return 2;
+			}
+		});
+		for(File f : lst) {
+			final String name = f.getName();
+			if(!name.endsWith(".ttf")) {
+				continue;
+			}
+			try {
+				ByteArrayOutputStream ous = new ByteArrayOutputStream();
+				FileInputStream fis = new FileInputStream(f);
+				Algorithms.streamCopy(fis, ous);
+				fis.close();
+				initFontType(ous.toByteArray(), name.substring(0, name.length() - 4), name.toLowerCase().contains("bold"),
+						name.toLowerCase().contains("italic"));
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+		
+	}
+	
+
+
+
 }

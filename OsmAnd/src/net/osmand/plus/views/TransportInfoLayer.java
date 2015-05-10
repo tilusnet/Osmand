@@ -4,18 +4,15 @@ import java.util.List;
 
 import net.osmand.access.AccessibleToast;
 import net.osmand.data.LatLon;
+import net.osmand.data.RotatedTileBox;
 import net.osmand.data.TransportRoute;
 import net.osmand.data.TransportStop;
 import net.osmand.plus.R;
 import net.osmand.plus.activities.TransportRouteHelper;
 import net.osmand.plus.resources.TransportIndexRepository.RouteInfoLocation;
-import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.PointF;
-import android.graphics.RectF;
-import android.util.DisplayMetrics;
-import android.view.WindowManager;
 import android.widget.Toast;
 
 public class TransportInfoLayer extends OsmandMapLayer {
@@ -25,8 +22,7 @@ public class TransportInfoLayer extends OsmandMapLayer {
 	private Paint paintInt;
 	private Paint paintEnd;
 	private boolean visible = true;
-	private DisplayMetrics dm;
-	
+
 	public TransportInfoLayer(TransportRouteHelper routeHelper){
 		this.routeHelper = routeHelper;
 	}
@@ -34,9 +30,6 @@ public class TransportInfoLayer extends OsmandMapLayer {
 	@Override
 	public void initLayer(OsmandMapTileView view) {
 		this.view = view;
-		dm = new DisplayMetrics();
-		WindowManager wmgr = (WindowManager) view.getContext().getSystemService(Context.WINDOW_SERVICE);
-		wmgr.getDefaultDisplay().getMetrics(dm);
 
 		paintInt = new Paint();
 		paintInt.setColor(view.getResources().getColor(R.color.transport_int));
@@ -53,16 +46,23 @@ public class TransportInfoLayer extends OsmandMapLayer {
 		this.visible = visible;
 	}
 	
-	public int getRadius(){
-		return (int) (dm.density * 8);
+	public int getRadius(RotatedTileBox tb){
+		final double zoom = tb.getZoom();
+		if(zoom <= 16) {
+			return (int) (tb.getDensity() * 8);
+		}
+		return (int) (tb.getDensity() * 10);
 	}
 
 	@Override
-	public void onDraw(Canvas canvas, RectF latLonBounds, RectF tilesRect, DrawSettings nightMode) {
-		if(routeHelper.routeIsCalculated() && visible){
+	public void onDraw(Canvas canvas, RotatedTileBox tileBox, DrawSettings settings) {}
+	
+	@Override
+	public void onPrepareBufferImage(Canvas canvas, RotatedTileBox tileBox, DrawSettings settings) {
+		if (routeHelper.routeIsCalculated() && visible) {
 			List<RouteInfoLocation> list = routeHelper.getRoute();
-			for(RouteInfoLocation l : list){
-				if(l == null){
+			for (RouteInfoLocation l : list) {
+				if (l == null) {
 					// once l is null in list
 					continue;
 				}
@@ -70,31 +70,31 @@ public class TransportInfoLayer extends OsmandMapLayer {
 				boolean start = false;
 				boolean end = false;
 				List<TransportStop> stops = l.getDirection() ? route.getForwardStops() : route.getBackwardStops();
-				for(int i=0; i<stops.size() && !end;  i++){
+				for (int i = 0; i < stops.size() && !end; i++) {
 					Paint toShow = paintInt;
 					TransportStop st = stops.get(i);
-					if(!start){
-						if(st == l.getStart()){
+					if (!start) {
+						if (st == l.getStart()) {
 							start = true;
 							toShow = paintEnd;
 						}
 					} else {
-						if(st == l.getStop()){
+						if (st == l.getStop()) {
 							end = true;
 							toShow = paintEnd;
 						}
 					}
-					if(start){
+					if (start) {
 						LatLon location = st.getLocation();
-						if (location.getLatitude() >= latLonBounds.bottom && location.getLatitude() <= latLonBounds.top  && location.getLongitude() >= latLonBounds.left 
-								&& location.getLongitude() <= latLonBounds.right ) {
-							int x = view.getRotatedMapXForPoint(location.getLatitude(), location.getLongitude());
-							int y = view.getRotatedMapYForPoint(location.getLatitude(), location.getLongitude());
-							canvas.drawRect(x - getRadius(), y - getRadius(), x + getRadius(), y + getRadius(), toShow);
+						if (tileBox.containsLatLon(location.getLatitude(), location.getLongitude())) {
+							int x = (int) tileBox.getPixXFromLatLon(location.getLatitude(), location.getLongitude());
+							int y = (int) tileBox.getPixYFromLatLon(location.getLatitude(), location.getLongitude());
+							canvas.drawRect(x - getRadius(tileBox), y - getRadius(tileBox), x + getRadius(tileBox), y
+									+ getRadius(tileBox), toShow);
 						}
 					}
 				}
-				
+
 			}
 		}
 	}
@@ -110,7 +110,7 @@ public class TransportInfoLayer extends OsmandMapLayer {
 
 
 	@Override
-	public boolean onSingleTap(PointF point) {
+	public boolean onSingleTap(PointF point, RotatedTileBox tileBox) {
 		int ex = (int) point.x;
 		int ey = (int) point.y;
 		if (visible && !routeHelper.getRoute().isEmpty()) {
@@ -136,10 +136,10 @@ public class TransportInfoLayer extends OsmandMapLayer {
 					}
 					if (start) {
 						LatLon location = st.getLocation();
-						int x = view.getRotatedMapXForPoint(location.getLatitude(), location.getLongitude());
-						int y = view.getRotatedMapYForPoint(location.getLatitude(), location.getLongitude());
-						if (Math.abs(x - ex) < getRadius() * 3 /2 && Math.abs(y - ey) < getRadius() * 3 /2) {
-							AccessibleToast.makeText(view.getContext(), st.getName(view.getSettings().USE_ENGLISH_NAMES.get()) + " : " + //$NON-NLS-1$
+						int x = (int) tileBox.getPixXFromLatLon(location.getLatitude(), location.getLongitude());
+						int y = (int) tileBox.getPixYFromLatLon(location.getLatitude(), location.getLongitude());
+						if (Math.abs(x - ex) < getRadius(tileBox) * 3 /2 && Math.abs(y - ey) < getRadius(tileBox) * 3 /2) {
+							AccessibleToast.makeText(view.getContext(), st.getName(view.getSettings().usingEnglishNames()) + " : " + //$NON-NLS-1$
 									route.getType() + " " + route.getRef() //$NON-NLS-1$
 							, Toast.LENGTH_LONG).show();
 							return true;
